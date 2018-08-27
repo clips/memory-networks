@@ -7,7 +7,7 @@ from net import N2N
 from torch.autograd import Variable
 from torch.nn.utils import clip_grad_norm
 from util import long_tensor_type
-from util import process_data, get_batch_from_batch_list, generate_batches
+from util import process_data, process_data_clicr, get_batch_from_batch_list, generate_batches
 
 
 def train_network(train_batch_list, val_batch_list, test_batch_list, train, val, test, vocab_size, story_size,
@@ -23,7 +23,7 @@ def train_network(train_batch_list, val_batch_list, test_batch_list, train, val,
     optimizer.zero_grad()
 
     running_loss = 0.0
-
+    # train_batches [passageTensor B*, qTensor, aTensor]
     train_batches, val_batches, test_batches = generate_batches(train_batch_list, val_batch_list, test_batch_list,
                                                                 train, val, test)
 
@@ -137,41 +137,41 @@ def model_path(args):
 def main():
     arg_parser = argparse.ArgumentParser(description="parser for End-to-End Memory Networks")
 
-    arg_parser.add_argument("--train", type=int, default=1)
-    arg_parser.add_argument("--epochs", type=int, default=100,
-                            help="number of training epochs, default: 100")
-    arg_parser.add_argument("--batch-size", type=int, default=32,
-                            help="batch size for training, default: 32")
-    arg_parser.add_argument("--lr", type=float, default=0.01, help="learning rate, default: 0.01")
-    arg_parser.add_argument("--embed-size", type=int, default=25, help="embedding dimensions, default: 25")
-    arg_parser.add_argument("--task-number", type=int, default=1,
-                            help="task to process, default: 1")
-    arg_parser.add_argument("--hops", type=int, default=1, help="Number of hops to make: 1, 2 or 3; default: 1 ")
-    arg_parser.add_argument("--anneal-factor", type=int, default=2,
-                            help="factor to anneal by every 'anneal-epoch(s)', default: 2")
-    arg_parser.add_argument("--anneal-epoch", type=int, default=25,
-                            help="anneal every [anneal-epoch] epoch, default: 25")
-    arg_parser.add_argument("--eval", type=int, default=1, help="evaluate after training, default: 1")
+    arg_parser.add_argument("--anneal-epoch", type=int, default=25, help="anneal every [anneal-epoch] epoch, default: 25")
+    arg_parser.add_argument("--anneal-factor", type=int, default=2, help="factor to anneal by every 'anneal-epoch(s)', default: 2")
+    arg_parser.add_argument("--batch-size", type=int, default=32, help="batch size for training, default: 32")
     arg_parser.add_argument("--cuda", type=int, default=0, help="train on GPU, default: 0")
-    arg_parser.add_argument("--memory-size", type=int, default=50, help="upper limit on memory size, default: 50")
-    arg_parser.add_argument("--log-epochs", type=int, default=4,
-                            help="Number of epochs after which to log progress, default: 4")
-    arg_parser.add_argument("--joint-training", type=int, default=0, help="joint training flag, default: 0")
-
-    arg_parser.add_argument("--saved-model-dir", type=str,
-                            default="./saved/", help="path to folder where trained model will be saved.")
-    arg_parser.add_argument("--data-dir", type=str, default="./data/tasks_1-20_v1-2/en",
-                            help="path to folder from where data is loaded")
-
+    arg_parser.add_argument("--data-dir", type=str, default="./data/tasks_1-20_v1-2/en", help="path to folder from where data is loaded")
+    arg_parser.add_argument("--dataset", type=str, help="babi or clicr")
     arg_parser.add_argument("--debug", type=bool, default=False, help="Flag for debugging purposes")
+    arg_parser.add_argument("--embed-size", type=int, default=25, help="embedding dimensions, default: 25")
+    arg_parser.add_argument("--ent_setup", type=str, default="ent", help="How to treat entities in CliCR.")
+    arg_parser.add_argument("--epochs", type=int, default=100, help="number of training epochs, default: 100")
+    arg_parser.add_argument("--eval", type=int, default=1, help="evaluate after training, default: 1")
+    arg_parser.add_argument("--hops", type=int, default=1, help="Number of hops to make: 1, 2 or 3; default: 1 ")
+    arg_parser.add_argument("--joint-training", type=int, default=0, help="joint training flag, default: 0")
+    arg_parser.add_argument("--log-epochs", type=int, default=4, help="Number of epochs after which to log progress, default: 4")
+    arg_parser.add_argument("--lr", type=float, default=0.01, help="learning rate, default: 0.01")
+    arg_parser.add_argument("--max_n_load", type=int, help="maximum number of clicr documents to use, for debugging")
+    arg_parser.add_argument("--memory-size", type=int, default=50, help="upper limit on memory size, default: 50")
+    arg_parser.add_argument("--saved-model-dir", type=str, default="./saved/", help="path to folder where trained model will be saved.")
+    arg_parser.add_argument("--task-number", type=int, default=1, help="Babi task to process, default: 1")
+    arg_parser.add_argument("--train", type=int, default=1)
 
     args = arg_parser.parse_args()
 
     check_paths(args)
     save_model_path = model_path(args)
 
+    if args.dataset == "babi":
+        process_data_f = process_data
+    elif args.dataset == "clicr":
+        process_data_f = process_data_clicr
+    else:
+        raise ValueError
+
     train_batches, val_batches, test_batches, train_set, val_set, test_set, sentence_size, vocab_size, story_size, word_idx = \
-        process_data(args)
+        process_data_f(args)
 
     if args.train == 1:
         train_network(train_batches, val_batches, test_batches, train_set, val_set, test_set, story_size=story_size,
