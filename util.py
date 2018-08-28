@@ -77,12 +77,8 @@ def process_data_clicr(args):
     if args.debug:
         print("Vocabulary Size: ", vocab_size)
 
-    train_set, train_batches, val_set, val_batches, test_set, test_batches = \
-        vectorize_task_data_clicr(args.batch_size, data, args.debug, memory_size,
-                            sentence_size, val_data, test_data, word_idx)
 
-    return train_batches, val_batches, test_batches, train_set, val_set, test_set, \
-           sentence_size, vocab_size, memory_size, word_idx
+    return data, val_data, test_data, sentence_size, vocab_size, memory_size, word_idx
 
 
 def process_data(args):
@@ -112,12 +108,7 @@ def process_data(args):
                                                                                   memory_size=args.memory_size,
                                                                                   vocab=vocab)
 
-    train_set, train_batches, val_set, val_batches, test_set, test_batches = \
-        vectorize_task_data(args.batch_size, data, args.debug, memory_size,
-                            random_state, sentence_size, test_data, test_size, word_idx)
-
-    return train_batches, val_batches, test_batches, train_set, val_set, test_set, \
-           sentence_size, vocab_size, memory_size, word_idx
+    return data, test_data, sentence_size, vocab_size, memory_size, word_idx
 
 
 def load_data_clicr(data_dir, ent_setup, max_n_load=None):
@@ -486,50 +477,6 @@ def vectorize_task_data(batch_size, data, debug, memory_size, random_state, sent
            list(test_batches)
 
 
-def vectorize_task_data_clicr(batch_size, data, debug, memory_size, sentence_size, val, test,
-                        word_idx):
-    trainS, trainQ, trainY = vectorize_data_clicr(data, word_idx, sentence_size, memory_size)
-
-    if debug is True:
-        print("S : ", trainS)
-        print("Q : ", trainQ)
-        print("Y : ", trainY)
-
-    testS, testQ, testY = vectorize_data_clicr(test, word_idx, sentence_size, memory_size)
-    valS, valQ, valY = vectorize_data_clicr(val, word_idx, sentence_size, memory_size)
-
-    if debug is True:
-        print(trainS[0].shape, trainQ[0].shape, trainY[0].shape)
-        print("Training set shape", trainS.shape)
-
-    # params
-    # n_train = trainS.shape[0]
-    # n_val = valS.shape[0]
-    # n_test = testS.shape[0]
-    # if debug is True:
-    #     print("Training Size: ", n_train)
-    #     print("Validation Size: ", n_val)
-    #     print("Testing Size: ", n_test)
-    # train_labels = np.argmax(trainY, axis=1)
-    # test_labels = np.argmax(testY, axis=1)
-    # val_labels = np.argmax(valY, axis=1)
-    # n_train_labels = train_labels.shape[0]
-    # n_val_labels = val_labels.shape[0]
-    # n_test_labels = test_labels.shape[0]
-    #
-    # if debug is True:
-    #     print("Training Labels Size: ", n_train_labels)
-    #     print("Validation Labels Size: ", n_val_labels)
-    #     print("Testing Labels Size: ", n_test_labels)
-
-    train_batches = zip(range(0, n_train - batch_size, batch_size), range(batch_size, n_train, batch_size))
-    val_batches = zip(range(0, n_val - batch_size, batch_size), range(batch_size, n_val, batch_size))
-    test_batches = zip(range(0, n_test - batch_size, batch_size), range(batch_size, n_test, batch_size))
-
-    return [trainS, trainQ, trainY], list(train_batches), [valS, valQ, valY], list(val_batches), [testS, testQ, testY], \
-           list(test_batches)
-
-
 def vectorize_data(data, word_idx, sentence_size, memory_size):
     '''
     Vectorize stories and queries.
@@ -540,6 +487,7 @@ def vectorize_data(data, word_idx, sentence_size, memory_size):
     Empty memories are 1-D arrays of length sentence_size filled with 0's.
 
     The answer array is returned as a one-hot encoding.
+
     '''
     S = []
     Q = []
@@ -577,7 +525,7 @@ def vectorize_data(data, word_idx, sentence_size, memory_size):
         S.append(ss)
         Q.append(q)
         A.append(y)
-    return np.array(S), np.array(Q), np.array(A)
+    return np.array(S), np.array(Q), np.array(A), None
 
 
 def vectorize_data_clicr(data, word_idx, sentence_size, memory_size):
@@ -590,10 +538,15 @@ def vectorize_data_clicr(data, word_idx, sentence_size, memory_size):
     Empty memories are 1-D arrays of length sentence_size filled with 0's.
 
     The answer array is returned as a one-hot encoding.
+
+    vocab_mask marks which elements (=words/entities) in V are found in the particular document
+
     '''
     S = []
     Q = []
     A = []
+    VM = []  # vocabulary mask
+
     for story, query, answer, _, _, _ in data:
         lq = max(0, sentence_size - len(query))
         q = [word_idx[w] for w in query] + [0] * lq
@@ -601,7 +554,10 @@ def vectorize_data_clicr(data, word_idx, sentence_size, memory_size):
         ss = []
         for i, sentence in enumerate(story, 1):
             ls = max(0, sentence_size - len(sentence))
-            ss.append([word_idx[w] for w in sentence] + [0] * ls)
+            sent = [word_idx[w] for w in sentence] + [0] * ls
+            if len(sent) > sentence_size:  # can happen in test/val as sentence_size is calculated on train
+                sent = sent[:sentence_size]
+            ss.append(sent)
 
         if len(ss) > memory_size:
             # TODO this is currently problematic as it relies on simple word match
@@ -624,10 +580,16 @@ def vectorize_data_clicr(data, word_idx, sentence_size, memory_size):
         for a in answer:
             y[word_idx[a]] = 1
 
+        vm = np.zeros_like(y)
+        ss_flat = np.array(ss).flatten()
+        vm[ss_flat[np.where(ss_flat > 0.)[0]]] = 1.
+
         S.append(ss)
         Q.append(q)
         A.append(y)
-    return np.array(S), np.array(Q), np.array(A)
+        VM.append(vm)
+
+    return np.array(S), np.array(Q), np.array(A), np.array(VM)
 
 
 def generate_batches(batches_tr, batches_v, batches_te, train, val, test):
@@ -646,12 +608,22 @@ def get_batch_from_batch_list(batches_tr, train):
     return train_batches
 
 
-def extract_tensors(A, Q, S):
+def vectorized_batches(batches, data, word_idx, sentence_size, memory_size, vectorizer=vectorize_data):
+    # batches are of form : [(0,2), (2,4),...]
+    for s_batch, e_batch in batches:
+        dataS, dataQ, dataA, dataVM = vectorizer(data[s_batch:e_batch], word_idx, sentence_size, memory_size)
+        dataA, dataQ, dataS, dataVM = extract_tensors(dataA, dataQ, dataS, dataVM)
+
+        yield [list(dataS), list(dataQ), list(dataA), list(dataVM) if dataVM is not None else None]
+
+
+def extract_tensors(A, Q, S, VM):
     A = torch.from_numpy(A).type(long_tensor_type)
     S = torch.from_numpy(S).type(float_tensor_type)
     Q = np.expand_dims(Q, 1)
     Q = torch.from_numpy(Q).type(long_tensor_type)
-    return A, Q, S
+    VM = torch.from_numpy(VM).type(float_tensor_type) if VM is not None else None
+    return A, Q, S, VM
 
 
 def construct_s_q_a_batch(batches, batched_objects, S, Q, A):

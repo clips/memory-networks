@@ -6,11 +6,11 @@ import torch
 from net import N2N
 from torch.autograd import Variable
 from torch.nn.utils import clip_grad_norm
-from util import long_tensor_type
-from util import process_data, process_data_clicr, get_batch_from_batch_list, generate_batches
+from util import long_tensor_type, vectorize_data_clicr, vectorized_batches, vectorize_data
+from util import process_data, process_data_clicr, get_batch_from_batch_list
 
 
-def train_network(train_batch_list, val_batch_list, test_batch_list, train, val, test, vocab_size, story_size,
+def train_network(train_batches_id, val_batches_id, test_batches_id, data, val_data, test_data, word_idx, sentence_size, vocab_size, story_size,
                   save_model_path, args):
     net = N2N(args.batch_size, args.embed_size, vocab_size, args.hops, story_size=story_size)
     if torch.cuda.is_available() and args.cuda == 1:
@@ -21,17 +21,20 @@ def train_network(train_batch_list, val_batch_list, test_batch_list, train, val,
 
     optimizer = torch.optim.Adam(net.parameters(), lr=args.lr)
     optimizer.zero_grad()
+    if args.dataset == "clicr":
+        vectorizer = vectorize_data_clicr
+    elif args.dataset == "babi":
+        vectorizer = vectorize_data
+    else:
+        raise NotImplementedError
 
     running_loss = 0.0
-    # train_batches [passageTensor B*, qTensor, aTensor]
-    train_batches, val_batches, test_batches = generate_batches(train_batch_list, val_batch_list, test_batch_list,
-                                                                train, val, test)
-
     best_val_acc_yet = 0.0
     for current_epoch in range(args.epochs):
+        train_batch_gen = vectorized_batches(train_batches_id, data, word_idx, sentence_size, story_size, vectorizer)
         current_len = 0
         current_correct = 0
-        for batch in train_batches:
+        for batch, n in zip(train_batch_gen, train_batches_id):
             idx_out, idx_true, out = epoch(batch, net)
             loss = criterion(out, idx_true)
             loss.backward()
@@ -41,12 +44,13 @@ def train_network(train_batch_list, val_batch_list, test_batch_list, train, val,
             current_correct, current_len = update_counts(current_correct, current_len, idx_out, idx_true)
             optimizer.step()
             optimizer.zero_grad()
+            print("Batch {}/{}.".format(n, len(train_batches_id)))
 
         if current_epoch % args.log_epochs == 0:
             accuracy = 100 * (current_correct / current_len)
-            val_acc = calculate_loss_and_accuracy(net, val_batches)
+            val_acc = calculate_loss_and_accuracy(net, val_batches_id, val_data, word_idx, sentence_size, story_size, vectorizer)
             print("Epochs: {}, Train Accuracy: {}, Loss: {}, Val_Acc:{}".format(current_epoch, accuracy,
-                                                                                running_loss.data[0],
+                                                                                running_loss.item(),
                                                                                 val_acc))
             if best_val_acc_yet <= val_acc:
                 torch.save(net.state_dict(), save_model_path)
@@ -62,13 +66,19 @@ def epoch(batch, net):
     story_batch = batch[0]
     query_batch = batch[1]
     answer_batch = batch[2]
+    vocabmask_batch = batch[3]
+
     A = Variable(torch.stack(answer_batch, dim=0), requires_grad=False).type(long_tensor_type)
     _, idx_true = torch.max(A, 1)
     idx_true = torch.squeeze(idx_true)
 
     S = torch.stack(story_batch, dim=0)
     Q = torch.stack(query_batch, dim=0)
-    out = net(S, Q)
+    if vocabmask_batch is not None:
+        VM = torch.stack(vocabmask_batch, dim=0)
+    else:
+        VM = None
+    out = net(S, Q, VM)
 
     _, idx_out = torch.max(out, 1)
     return idx_out, idx_true, out
@@ -87,10 +97,11 @@ def count_predictions(labels, predicted):
     return batch_len, correct
 
 
-def calculate_loss_and_accuracy(net, batches):
+def calculate_loss_and_accuracy(net, batches_id, data, word_idx, sentence_size, story_size, vectorizer):
+    batch_gen = vectorized_batches(batches_id, data, word_idx, sentence_size, story_size, vectorizer)
     current_len = 0
     current_correct = 0
-    for batch in batches:
+    for batch in batch_gen:
         idx_out, idx_true, out = epoch(batch, net)
         current_correct, current_len = update_counts(current_correct, current_len, idx_out, idx_true)
     return 100 * (current_correct / current_len)
@@ -163,25 +174,56 @@ def main():
     check_paths(args)
     save_model_path = model_path(args)
 
-    if args.dataset == "babi":
-        process_data_f = process_data
-    elif args.dataset == "clicr":
-        process_data_f = process_data_clicr
+    if args.dataset == "clicr":
+        # load data
+        data, val_data, test_data, sentence_size, vocab_size, story_size, word_idx = process_data_clicr(args)
+
+        # get batch indices
+        # TODO: don't leave out instances
+        n_train = len(data)
+        n_val = len(val_data)
+        n_test = len(test_data)
+        train_batches_id = list(zip(range(0, n_train - args.batch_size, args.batch_size), range(args.batch_size, n_train, args.batch_size)))
+        val_batches_id = list(zip(range(0, n_val - args.batch_size, args.batch_size), range(args.batch_size, n_val, args.batch_size)))
+        test_batches_id = list(zip(range(0, n_test - args.batch_size, args.batch_size), range(args.batch_size, n_test, args.batch_size)))
+
+        if args.train == 1:
+            train_network(train_batches_id, val_batches_id, test_batches_id, data, val_data, test_data, word_idx, sentence_size, story_size=story_size,
+                          vocab_size=vocab_size, save_model_path=save_model_path, args=args)
+
+        #if args.eval == 1:
+        #    model = save_model_path
+        #    eval_network(story_size=story_size, vocab_size=vocab_size,
+        #                 EMBED_SIZE=args.embed_size, batch_size=args.batch_size, depth=args.hops,
+        #                 model=model, test_batches=test_batches, test=test_set, cuda=args.cuda)
+
+    elif args.dataset == "babi":
+        data, test_data, sentence_size, vocab_size, story_size, word_idx = process_data(args)
+        # get batch indices
+        # TODO: don't leave out instances
+        n_train = len(data)
+        n_test = len(test_data)
+        train_batches_id = list(zip(range(0, n_train - args.batch_size, args.batch_size),
+                               range(args.batch_size, n_train, args.batch_size)))
+        test_batches_id = list(zip(range(0, n_test - args.batch_size, args.batch_size),
+                              range(args.batch_size, n_test, args.batch_size)))
+
+        if args.train == 1:
+            print("dbg: for babi val=test")
+            train_network(train_batches_id, test_batches_id, test_batches_id, data, test_data, test_data, word_idx, sentence_size, story_size=story_size,
+                          vocab_size=vocab_size, save_model_path=save_model_path, args=args)
+
+        #if args.eval == 1:
+        #    model = save_model_path
+        #    eval_network(story_size=story_size, vocab_size=vocab_size,
+        #                 EMBED_SIZE=args.embed_size, batch_size=args.batch_size, depth=args.hops,
+        #                 model=model, test_batches=test_batches, test=test_set, cuda=args.cuda)
+
     else:
         raise ValueError
 
-    train_batches, val_batches, test_batches, train_set, val_set, test_set, sentence_size, vocab_size, story_size, word_idx = \
-        process_data_f(args)
 
-    if args.train == 1:
-        train_network(train_batches, val_batches, test_batches, train_set, val_set, test_set, story_size=story_size,
-                      vocab_size=vocab_size, save_model_path=save_model_path, args=args)
 
-    if args.eval == 1:
-        model = save_model_path
-        eval_network(story_size=story_size, vocab_size=vocab_size,
-                     EMBED_SIZE=args.embed_size, batch_size=args.batch_size, depth=args.hops,
-                     model=model, test_batches=test_batches, test=test_set, cuda=args.cuda)
 
 
 if __name__ == '__main__':

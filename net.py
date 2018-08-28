@@ -45,7 +45,10 @@ class N2N(torch.nn.Module):
         # final weight matrix
         self.W = nn.Parameter(torch.randn(embed_size, vocab_size), requires_grad=True)
 
-    def forward(self, trainS, trainQ):
+    def forward(self, trainS, trainQ, trainVM):
+        """
+        :param trainVM: a B*V tensor masking all predictions which are not words/entities in the relevant document
+        """
         S = Variable(trainS, requires_grad=False)
         Q = Variable(torch.squeeze(trainQ, 1), requires_grad=False)
 
@@ -70,6 +73,8 @@ class N2N(torch.nn.Module):
 
         # Final softmax layer
         y_pred = F.softmax(wx)
+        if trainVM is not None:
+            y_pred = y_pred * trainVM
 
         return y_pred
 
