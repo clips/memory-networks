@@ -10,6 +10,7 @@ from itertools import chain
 
 import numpy as np
 import torch
+from torch import nn
 from sklearn import model_selection
 from sklearn.metrics import jaccard_similarity_score
 from torch.autograd import Variable
@@ -684,5 +685,26 @@ def weight_update(name, param):
     print(name, (torch.norm(update) / torch.norm(weight)).data[0])
 
 
-def load_emb(fn):
-    pass
+def load_w2v(fn):
+    ws = []
+    with open(fn) as fh:
+        m, n = map(eval, fh.readline().strip().split())
+        e_m = np.zeros((m, n))
+        for c, l in enumerate(fh):
+            w, *e = l.strip().split()
+            if len(e) != n:
+                print("Incorrect embedding dimension, skipping.")
+                continue
+            if not w or not e:
+                print("Empty w or e.")
+            ws.append(w)
+            e_m[c] = e
+
+    return e_m, n
+
+
+def load_emb(fn, freeze=False):
+    embs, dim = load_w2v(fn)
+    embs_tensor = nn.Embedding.from_pretrained(float_tensor_type(embs), freeze=freeze)
+
+    return embs_tensor, dim

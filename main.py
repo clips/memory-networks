@@ -12,7 +12,7 @@ from util import process_data, process_data_clicr, get_batch_from_batch_list
 
 def train_network(train_batches_id, val_batches_id, test_batches_id, data, val_data, test_data, word_idx, sentence_size, vocab_size, story_size,
                   save_model_path, args):
-    net = N2N(args.batch_size, args.embed_size, vocab_size, args.hops, story_size=story_size)
+    net = N2N(args.batch_size, args.embed_size, vocab_size, args.hops, story_size=story_size, args=args)
     if torch.cuda.is_available() and args.cuda == 1:
         net = net.cuda()
     criterion = torch.nn.CrossEntropyLoss()
@@ -156,32 +156,37 @@ def main():
     arg_parser.add_argument("--cuda", type=int, default=0, help="train on GPU, default: 0")
     arg_parser.add_argument("--data-dir", type=str, default="./data/tasks_1-20_v1-2/en", help="path to folder from where data is loaded")
     arg_parser.add_argument("--dataset", type=str, help="babi or clicr")
-    arg_parser.add_argument("--debug", type=bool, default=False, help="Flag for debugging purposes")
-    arg_parser.add_argument("--embed-size", type=int, default=25, help="embedding dimensions, default: 25")
+    arg_parser.add_argument("--debug", action="store_true", help="Flag for debugging purposes")
+    arg_parser.add_argument("--embed-size", type=int, default=50, help="embedding dimensions, default: 25")
     arg_parser.add_argument("--ent_setup", type=str, default="ent", help="How to treat entities in CliCR.")
     arg_parser.add_argument("--epochs", type=int, default=100, help="number of training epochs, default: 100")
     arg_parser.add_argument("--eval", type=int, default=1, help="evaluate after training, default: 1")
+    arg_parser.add_argument("--freeze-pretrained-word-embed", action="store_true", help="will prevent the pretrained word embeddings from being updated")
     arg_parser.add_argument("--hops", type=int, default=1, help="Number of hops to make: 1, 2 or 3; default: 1 ")
     arg_parser.add_argument("--joint-training", type=int, default=0, help="joint training flag, default: 0")
     arg_parser.add_argument("--log-epochs", type=int, default=4, help="Number of epochs after which to log progress, default: 4")
     arg_parser.add_argument("--lr", type=float, default=0.01, help="learning rate, default: 0.01")
     arg_parser.add_argument("--max_n_load", type=int, help="maximum number of clicr documents to use, for debugging")
     arg_parser.add_argument("--memory-size", type=int, default=50, help="upper limit on memory size, default: 50")
-    arg_parser.add_argument("--pretrained-word-embed", type=str, default="/nas/corpora/accumulate/clicr/embeddings/4bfb98c2-688e-11e7-aa74-901b0e5592c8/embeddings",
-                            help="path to the txt file with word embeddings")
+    arg_parser.add_argument("--pretrained-word-embed", type=str,
+                            help="path to the txt file with word embeddings") #"/nas/corpora/accumulate/clicr/embeddings/4bfb98c2-688e-11e7-aa74-901b0e5592c8/embeddings"
     arg_parser.add_argument("--saved-model-dir", type=str, default="./saved/", help="path to folder where trained model will be saved.")
     arg_parser.add_argument("--task-number", type=int, default=1, help="Babi task to process, default: 1")
     arg_parser.add_argument("--train", type=int, default=1)
 
     args = arg_parser.parse_args()
-
     check_paths(args)
+    for arg in vars(args):
+        print(arg, getattr(args, arg))
     save_model_path = model_path(args)
 
     if args.dataset == "clicr":
         # load data
         data, val_data, test_data, sentence_size, vocab_size, story_size, word_idx = process_data_clicr(args)
-
+        if args.pretrained_word_embed:
+            print("Using pretrained word embeddings: {}".format(args.pretrained_word_embed))
+        else:
+            print("Using random initialization.")
         # get batch indices
         # TODO: don't leave out instances
         n_train = len(data)

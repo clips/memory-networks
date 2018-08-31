@@ -2,7 +2,7 @@ import torch
 from torch import nn
 from torch.autograd import Variable
 from torch.nn import functional as F
-from util import get_position_encoding, long_tensor_type
+from util import get_position_encoding, long_tensor_type, load_emb
 
 
 class N2N(torch.nn.Module):
@@ -13,6 +13,8 @@ class N2N(torch.nn.Module):
         self.batch_size = batch_size
         self.story_size = story_size
         self.hops = hops
+        self.pretrained_word_embed = args.pretrained_word_embed
+        self.freeze_pretrained_word_embed = args.freeze_pretrained_word_embed
 
         if self.hops <= 0:
             raise ValueError("Number of hops have to be greater than 0")
@@ -21,36 +23,42 @@ class N2N(torch.nn.Module):
             raise ValueError("Number of hops should be less than 4")
 
         # story and query embedding
-        self.A1 = nn.Embedding(vocab_size, embed_size)
         if args.pretrained_word_embed:
-            self.A1.weight = nn.Parameter(load_emb(args.pretrained_word_embed))
+            self.A1, dim = load_emb(args.pretrained_word_embed, freeze=args.freeze_pretrained_word_embed)
+            assert dim == self.embed_size
         else:
+            self.A1 = nn.Embedding(vocab_size, embed_size)
             self.A1.weight = nn.Parameter(torch.randn(vocab_size, embed_size).normal_(0, 0.1))
+
         # temporal encoding
         #self.TA = nn.Parameter(torch.randn(self.batch_size, self.story_size, self.embed_size).normal_(0, 0.1))
 
         # for 1 hop:
         # for >1 hop:
-        self.A2 = nn.Embedding(vocab_size, embed_size)
         if args.pretrained_word_embed:
-            pass
+            self.A2, dim = load_emb(args.pretrained_word_embed, freeze=args.freeze_pretrained_word_embed)
+            assert dim == self.embed_size
         else:
+            self.A2 = nn.Embedding(vocab_size, embed_size)
             self.A2.weight = nn.Parameter(torch.randn(vocab_size, embed_size).normal_(0, 0.1))
         #self.TA2 = nn.Parameter(torch.randn(self.batch_size, self.story_size, self.embed_size).normal_(0, 0.1))
 
         if self.hops >= 2:
-            self.A3 = nn.Embedding(vocab_size, embed_size)
             if args.pretrained_word_embed:
-                pass
+                self.A3, dim = load_emb(args.pretrained_word_embed, freeze=args.freeze_pretrained_word_embed)
+                assert dim == self.embed_size
             else:
+                self.A3 = nn.Embedding(vocab_size, embed_size)
                 self.A3.weight = nn.Parameter(torch.randn(vocab_size, embed_size).normal_(0, 0.1))
+
             #self.TA3 = nn.Parameter(torch.randn(self.batch_size, self.story_size, self.embed_size).normal_(0, 0.1))
 
         if self.hops >= 3:
-            self.A4 = nn.Embedding(vocab_size, embed_size)
             if args.pretrained_word_embed:
-                pass
+                self.A4, dim = load_emb(args.pretrained_word_embed, freeze=args.freeze_pretrained_word_embed)
+                assert dim == self.embed_size
             else:
+                self.A4 = nn.Embedding(vocab_size, embed_size)
                 self.A4.weight = nn.Parameter(torch.randn(vocab_size, embed_size).normal_(0, 0.1))
             #self.TA4 = nn.Parameter(torch.randn(self.batch_size, self.story_size, self.embed_size).normal_(0, 0.1))
 
