@@ -1,23 +1,28 @@
 import argparse
+from datetime import datetime
 import os
-import sys
 
 import torch
-from net import N2N
 from torch.autograd import Variable
 from torch.nn.utils import clip_grad_norm
+
+from logger import get_logger
+from net import N2N
 from util import long_tensor_type, vectorize_data_clicr, vectorized_batches, vectorize_data
 from util import process_data, process_data_clicr, get_batch_from_batch_list
 
 
-def train_network(train_batches_id, val_batches_id, test_batches_id, data, val_data, test_data, word_idx, sentence_size, vocab_size, story_size,
-                  save_model_path, args):
+def train_network(train_batches_id, val_batches_id, test_batches_id, data, val_data, test_data, word_idx, sentence_size,
+                  vocab_size, story_size,
+                  save_model_path, args, log):
     net = N2N(args.batch_size, args.embed_size, vocab_size, args.hops, story_size=story_size, args=args)
     if torch.cuda.is_available() and args.cuda == 1:
         net = net.cuda()
     criterion = torch.nn.CrossEntropyLoss()
-    if args.debug is True:
-        print("TRAINABLE PARAMETERS IN THE NETWORK: ", list(net.parameters()))
+    #for name, param in net.named_parameters():
+    #    if param.requires_grad:
+    #        log.info("{}\t{}".format(name, param.data))
+    log.info("{}\n".format(net))
 
     optimizer = torch.optim.Adam(net.parameters(), lr=args.lr)
     optimizer.zero_grad()
@@ -31,8 +36,6 @@ def train_network(train_batches_id, val_batches_id, test_batches_id, data, val_d
     running_loss = 0.0
     best_val_acc_yet = 0.0
     for current_epoch in range(args.epochs):
-        if current_epoch ==28:
-            print()
         train_batch_gen = vectorized_batches(train_batches_id, data, word_idx, sentence_size, story_size, vectorizer)
         current_len = 0
         current_correct = 0
@@ -46,15 +49,16 @@ def train_network(train_batches_id, val_batches_id, test_batches_id, data, val_d
             current_correct, current_len = update_counts(current_correct, current_len, idx_out, idx_true)
             optimizer.step()
             optimizer.zero_grad()
-            #print("Batch {}/{}.".format(n, len(train_batches_id)))
+            # print("Batch {}/{}.".format(n, len(train_batches_id)))
 
         if current_epoch % args.log_epochs == 0:
             accuracy = 100 * (current_correct / current_len)
-            val_acc = calculate_loss_and_accuracy(net, val_batches_id, val_data, word_idx, sentence_size, story_size, vectorizer)
-            print("Epochs: {}, Train Accuracy: {}, Loss: {}, Val_Acc:{}".format(current_epoch, accuracy,
+            val_acc = calculate_loss_and_accuracy(net, val_batches_id, val_data, word_idx, sentence_size, story_size,
+                                                  vectorizer)
+            log.info("Epochs: {}, Train Accuracy: {}, Loss: {}, Val_Acc:{}".format(current_epoch, accuracy,
                                                                                 running_loss.item(),
                                                                                 val_acc))
-            if best_val_acc_yet <= val_acc:
+            if best_val_acc_yet <= val_acc and args.save_model:
                 torch.save(net.state_dict(), save_model_path)
                 best_val_acc_yet = val_acc
 
@@ -109,9 +113,9 @@ def calculate_loss_and_accuracy(net, batches_id, data, word_idx, sentence_size, 
     return 100 * (current_correct / current_len)
 
 
-def eval_network(vocab_size, story_size, model, test_batches, test, EMBED_SIZE=50, batch_size=2,
+def eval_network(vocab_size, story_size, model, test_batches, test, log, EMBED_SIZE=50, batch_size=2,
                  depth=1, cuda=0):
-    print("Evaluating")
+    log.info("Evaluating")
     net = N2N(batch_size, EMBED_SIZE, vocab_size, depth, story_size=story_size)
     net.load_state_dict(torch.load(model))
     if torch.cuda.is_available() and cuda == 1:
@@ -126,84 +130,95 @@ def eval_network(vocab_size, story_size, model, test_batches, test, EMBED_SIZE=5
         current_correct, current_len = update_counts(current_correct, current_len, idx_out, idx_true)
 
     accuracy = 100 * (current_correct / current_len)
-    print("Accuracy : ", str(accuracy))
+    log.info("Accuracy : {}".format(accuracy))
 
 
-def check_paths(args):
-    try:
-        if not os.path.exists(args.saved_model_dir):
-            os.makedirs(args.saved_model_dir)
-    except OSError as e:
-        print(e)
-        sys.exit(1)
-
-
-def model_path(args):
+def model_path(dir, args):
     if args.joint_training == 1:
         saved_model_filename = "joint_model.model"
-    else:
+    elif args.dataset == "babi":
         saved_model_filename = str(args.task_number) + "_model.model"
-    saved_model_path = os.path.join(args.saved_model_dir, saved_model_filename)
+    else:
+        saved_model_filename = "model.model"
+    saved_model_path = os.path.join(dir, saved_model_filename)
     return saved_model_path
 
 
 def main():
     arg_parser = argparse.ArgumentParser(description="parser for End-to-End Memory Networks")
 
-    arg_parser.add_argument("--anneal-epoch", type=int, default=25, help="anneal every [anneal-epoch] epoch, default: 25")
-    arg_parser.add_argument("--anneal-factor", type=int, default=2, help="factor to anneal by every 'anneal-epoch(s)', default: 2")
+    arg_parser.add_argument("--anneal-epoch", type=int, default=25,
+                            help="anneal every [anneal-epoch] epoch, default: 25")
+    arg_parser.add_argument("--anneal-factor", type=int, default=2,
+                            help="factor to anneal by every 'anneal-epoch(s)', default: 2")
     arg_parser.add_argument("--batch-size", type=int, default=32, help="batch size for training, default: 32")
     arg_parser.add_argument("--cuda", type=int, default=0, help="train on GPU, default: 0")
-    arg_parser.add_argument("--data-dir", type=str, default="./data/tasks_1-20_v1-2/en", help="path to folder from where data is loaded")
+    arg_parser.add_argument("--data-dir", type=str, default="./data/tasks_1-20_v1-2/en",
+                            help="path to folder from where data is loaded")
     arg_parser.add_argument("--dataset", type=str, help="babi or clicr")
     arg_parser.add_argument("--debug", action="store_true", help="Flag for debugging purposes")
     arg_parser.add_argument("--embed-size", type=int, default=50, help="embedding dimensions, default: 25")
-    arg_parser.add_argument("--ent_setup", type=str, default="ent", help="How to treat entities in CliCR.")
+    arg_parser.add_argument("--ent-setup", type=str, default="ent", help="How to treat entities in CliCR.")
     arg_parser.add_argument("--epochs", type=int, default=100, help="number of training epochs, default: 100")
     arg_parser.add_argument("--eval", type=int, default=1, help="evaluate after training, default: 1")
-    arg_parser.add_argument("--freeze-pretrained-word-embed", action="store_true", help="will prevent the pretrained word embeddings from being updated")
+    arg_parser.add_argument("--freeze-pretrained-word-embed", action="store_true",
+                            help="will prevent the pretrained word embeddings from being updated")
     arg_parser.add_argument("--hops", type=int, default=1, help="Number of hops to make: 1, 2 or 3; default: 1 ")
     arg_parser.add_argument("--joint-training", type=int, default=0, help="joint training flag, default: 0")
-    arg_parser.add_argument("--log-epochs", type=int, default=4, help="Number of epochs after which to log progress, default: 4")
+    arg_parser.add_argument("--log-epochs", type=int, default=4,
+                            help="Number of epochs after which to log progress, default: 4")
     arg_parser.add_argument("--lr", type=float, default=0.01, help="learning rate, default: 0.01")
-    arg_parser.add_argument("--max_n_load", type=int, help="maximum number of clicr documents to use, for debugging")
+    arg_parser.add_argument("--max-n-load", type=int, help="maximum number of clicr documents to use, for debugging")
     arg_parser.add_argument("--memory-size", type=int, default=50, help="upper limit on memory size, default: 50")
     arg_parser.add_argument("--pretrained-word-embed", type=str,
-                            help="path to the txt file with word embeddings") #"/nas/corpora/accumulate/clicr/embeddings/4bfb98c2-688e-11e7-aa74-901b0e5592c8/embeddings"
-    arg_parser.add_argument("--saved-model-dir", type=str, default="./saved/", help="path to folder where trained model will be saved.")
+                            help="path to the txt file with word embeddings")  # "/nas/corpora/accumulate/clicr/embeddings/4bfb98c2-688e-11e7-aa74-901b0e5592c8/embeddings"
+    arg_parser.add_argument("--save-model", action="store_true")
     arg_parser.add_argument("--task-number", type=int, default=1, help="Babi task to process, default: 1")
     arg_parser.add_argument("--train", type=int, default=1)
 
     args = arg_parser.parse_args()
-    check_paths(args)
-    for arg in vars(args):
-        print(arg, getattr(args, arg))
-    save_model_path = model_path(args)
+
+    exp_dir = "./experiments/"
+    if not os.path.exists(exp_dir):
+        os.makedirs(exp_dir)
+    logdir = "{}{}".format(exp_dir, datetime.now().strftime("%Y%m%d_%H%M%S_%f"))
+    if not os.path.exists(logdir):
+        os.makedirs(logdir)
+    log = get_logger(logdir + "/log")
+    for argk, argv in sorted(vars(args).items()):
+        log.info("{}: {}".format(argk, argv))
+    log.info("")
+    print("Output to {}".format(logdir))
+    save_model_path = model_path(logdir, args)
 
     if args.dataset == "clicr":
         # load data
-        data, val_data, test_data, sentence_size, vocab_size, story_size, word_idx = process_data_clicr(args)
+        data, val_data, test_data, sentence_size, vocab_size, story_size, word_idx = process_data_clicr(args, log=log)
         if args.pretrained_word_embed:
-            print("Using pretrained word embeddings: {}".format(args.pretrained_word_embed))
+            log.info("Using pretrained word embeddings: {}".format(args.pretrained_word_embed))
         else:
-            print("Using random initialization.")
+            log.info("Using random initialization.")
         # get batch indices
         # TODO: don't leave out instances
         n_train = len(data)
         n_val = len(val_data)
         n_test = len(test_data)
-        train_batches_id = list(zip(range(0, n_train - args.batch_size, args.batch_size), range(args.batch_size, n_train, args.batch_size)))
-        val_batches_id = list(zip(range(0, n_val - args.batch_size, args.batch_size), range(args.batch_size, n_val, args.batch_size)))
-        test_batches_id = list(zip(range(0, n_test - args.batch_size, args.batch_size), range(args.batch_size, n_test, args.batch_size)))
+        train_batches_id = list(
+            zip(range(0, n_train - args.batch_size, args.batch_size), range(args.batch_size, n_train, args.batch_size)))
+        val_batches_id = list(
+            zip(range(0, n_val - args.batch_size, args.batch_size), range(args.batch_size, n_val, args.batch_size)))
+        test_batches_id = list(
+            zip(range(0, n_test - args.batch_size, args.batch_size), range(args.batch_size, n_test, args.batch_size)))
 
         if args.train == 1:
-            train_network(train_batches_id, val_batches_id, test_batches_id, data, val_data, test_data, word_idx, sentence_size, story_size=story_size,
-                          vocab_size=vocab_size, save_model_path=save_model_path, args=args)
+            train_network(train_batches_id, val_batches_id, test_batches_id, data, val_data, test_data, word_idx,
+                          sentence_size, story_size=story_size,
+                          vocab_size=vocab_size, save_model_path=save_model_path, args=args, log=log)
 
-        #if args.eval == 1:
+        # if args.eval == 1:
         #    model = save_model_path
         #    eval_network(story_size=story_size, vocab_size=vocab_size,
-        #                 EMBED_SIZE=args.embed_size, batch_size=args.batch_size, depth=args.hops,
+        #                 log=log, EMBED_SIZE=args.embed_size, batch_size=args.batch_size, depth=args.hops,
         #                 model=model, test_batches=test_batches, test=test_set, cuda=args.cuda)
 
     elif args.dataset == "babi":
@@ -213,26 +228,24 @@ def main():
         n_train = len(data)
         n_test = len(test_data)
         train_batches_id = list(zip(range(0, n_train - args.batch_size, args.batch_size),
-                               range(args.batch_size, n_train, args.batch_size)))
+                                    range(args.batch_size, n_train, args.batch_size)))
         test_batches_id = list(zip(range(0, n_test - args.batch_size, args.batch_size),
-                              range(args.batch_size, n_test, args.batch_size)))
+                                   range(args.batch_size, n_test, args.batch_size)))
 
         if args.train == 1:
             print("dbg: for babi val=test")
-            train_network(train_batches_id, test_batches_id, test_batches_id, data, test_data, test_data, word_idx, sentence_size, story_size=story_size,
-                          vocab_size=vocab_size, save_model_path=save_model_path, args=args)
+            train_network(train_batches_id, test_batches_id, test_batches_id, data, test_data, test_data, word_idx,
+                          sentence_size, story_size=story_size,
+                          vocab_size=vocab_size, save_model_path=save_model_path, args=args, log=log)
 
-        #if args.eval == 1:
+        # if args.eval == 1:
         #    model = save_model_path
         #    eval_network(story_size=story_size, vocab_size=vocab_size,
-        #                 EMBED_SIZE=args.embed_size, batch_size=args.batch_size, depth=args.hops,
-        #                 model=model, test_batches=test_batches, test=test_set, cuda=args.cuda)
+        #                 log=log, EMBED_SIZE=args.embed_size, batch_size=args.batch_size, depth=args.hops,
+        #                 model=model, test_batches=test_batches, test=test_set, cuda=args.cuda, log=log)
 
     else:
         raise ValueError
-
-
-
 
 
 if __name__ == '__main__':

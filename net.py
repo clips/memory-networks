@@ -2,6 +2,7 @@ import torch
 from torch import nn
 from torch.autograd import Variable
 from torch.nn import functional as F
+
 from util import get_position_encoding, long_tensor_type, load_emb
 
 
@@ -31,7 +32,7 @@ class N2N(torch.nn.Module):
             self.A1.weight = nn.Parameter(torch.randn(vocab_size, embed_size).normal_(0, 0.1))
 
         # temporal encoding
-        #self.TA = nn.Parameter(torch.randn(self.batch_size, self.story_size, self.embed_size).normal_(0, 0.1))
+        # self.TA = nn.Parameter(torch.randn(self.batch_size, self.story_size, self.embed_size).normal_(0, 0.1))
 
         # for 1 hop:
         # for >1 hop:
@@ -41,7 +42,7 @@ class N2N(torch.nn.Module):
         else:
             self.A2 = nn.Embedding(vocab_size, embed_size)
             self.A2.weight = nn.Parameter(torch.randn(vocab_size, embed_size).normal_(0, 0.1))
-        #self.TA2 = nn.Parameter(torch.randn(self.batch_size, self.story_size, self.embed_size).normal_(0, 0.1))
+        # self.TA2 = nn.Parameter(torch.randn(self.batch_size, self.story_size, self.embed_size).normal_(0, 0.1))
 
         if self.hops >= 2:
             if args.pretrained_word_embed:
@@ -51,7 +52,7 @@ class N2N(torch.nn.Module):
                 self.A3 = nn.Embedding(vocab_size, embed_size)
                 self.A3.weight = nn.Parameter(torch.randn(vocab_size, embed_size).normal_(0, 0.1))
 
-            #self.TA3 = nn.Parameter(torch.randn(self.batch_size, self.story_size, self.embed_size).normal_(0, 0.1))
+            # self.TA3 = nn.Parameter(torch.randn(self.batch_size, self.story_size, self.embed_size).normal_(0, 0.1))
 
         if self.hops >= 3:
             if args.pretrained_word_embed:
@@ -60,10 +61,10 @@ class N2N(torch.nn.Module):
             else:
                 self.A4 = nn.Embedding(vocab_size, embed_size)
                 self.A4.weight = nn.Parameter(torch.randn(vocab_size, embed_size).normal_(0, 0.1))
-            #self.TA4 = nn.Parameter(torch.randn(self.batch_size, self.story_size, self.embed_size).normal_(0, 0.1))
+            # self.TA4 = nn.Parameter(torch.randn(self.batch_size, self.story_size, self.embed_size).normal_(0, 0.1))
 
         # final weight matrix
-        #self.W = nn.Parameter(torch.randn(embed_size, vocab_size), requires_grad=True)
+        # self.W = nn.Parameter(torch.randn(embed_size, vocab_size), requires_grad=True)
         self.nonlin = nn.Tanh()
         self.lin = nn.Linear(embed_size, embed_size)
         self.lin2 = nn.Linear(embed_size, embed_size)
@@ -85,35 +86,35 @@ class N2N(torch.nn.Module):
         # for i in range(self.hops):
         #     w_u = self.one_hop(S, w_u, self.A[i], self.A[i + 1], self.TA[i], self.TA[i + 1])
 
-        w_u = self.hop(S, queries_sum, self.A1, self.A2)#, self.TA, self.TA2)
+        w_u = self.hop(S, queries_sum, self.A1, self.A2)  # , self.TA, self.TA2)
 
         if self.hops >= 2:
-            w_u = self.hop(S, w_u, self.A2, self.A3)#, self.TA, self.TA3)
+            w_u = self.hop(S, w_u, self.A2, self.A3)  # , self.TA, self.TA3)
 
         if self.hops >= 3:
-            w_u = self.hop(S, w_u, self.A3, self.A4)#, self.TA, self.TA4)
+            w_u = self.hop(S, w_u, self.A3, self.A4)  # , self.TA, self.TA4)
 
-        #wx = torch.mm(w_u, self.W)
+        # wx = torch.mm(w_u, self.W)
         wx = self.lin(w_u)
         wx = self.nonlin(wx)
-        #wx = self.lin2(w_u)
-        #wx = self.nonlin(wx)
+        # wx = self.lin2(w_u)
+        # wx = self.nonlin(wx)
         wx = self.lin_final(wx)
 
         # Final layer
         y_pred = wx
-        #y_pred = F.softmax(wx)
+        # y_pred = F.softmax(wx)
         if trainVM is not None:
             y_pred = y_pred * trainVM
 
         return y_pred
 
-    def hop(self, trainS, u_k_1, A_k, C_k):#, temp_A_k, temp_C_k):
+    def hop(self, trainS, u_k_1, A_k, C_k):  # , temp_A_k, temp_C_k):
         mem_emb_A = self.embed_story(trainS, A_k)
         mem_emb_C = self.embed_story(trainS, C_k)
 
-        mem_emb_A_temp = mem_emb_A #+ temp_A_k
-        mem_emb_C_temp = mem_emb_C #+ temp_C_k
+        mem_emb_A_temp = mem_emb_A  # + temp_A_k
+        mem_emb_C_temp = mem_emb_C  # + temp_C_k
 
         u_k_1_list = [u_k_1] * self.story_size
 

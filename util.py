@@ -46,8 +46,8 @@ SYMB_BEGIN = "@begin"
 SYMB_END = "@end"
 
 
-def process_data_clicr(args):
-    data, val_data, test_data, vocab = load_data_clicr(args.data_dir, args.ent_setup, args.max_n_load)
+def process_data_clicr(args, log):
+    data, val_data, test_data, vocab = load_data_clicr(args.data_dir, args.ent_setup, log, args.max_n_load)
 
     '''
     clicr data is of the form:
@@ -74,15 +74,15 @@ def process_data_clicr(args):
     '''
     memory_size, sentence_size, vocab_size, word_idx = calculate_parameter_values_clicr(data=data, debug=args.debug,
                                                                                   memory_size=args.memory_size,
-                                                                                  vocab=vocab)
+                                                                                  vocab=vocab, log=log)
     if args.debug:
-        print("Vocabulary Size: ", vocab_size)
+        log.info("Vocabulary Size: {}".format(vocab_size))
 
 
     return data, val_data, test_data, sentence_size, vocab_size, memory_size, word_idx
 
 
-def process_data(args):
+def process_data(args, log):
     test_size = .1
     random_state = None
     data, test_data, vocab = load_data(args.data_dir, args.joint_training, args.task_number)
@@ -107,12 +107,12 @@ def process_data(args):
 
     memory_size, sentence_size, vocab_size, word_idx = calculate_parameter_values(data=data, debug=args.debug,
                                                                                   memory_size=args.memory_size,
-                                                                                  vocab=vocab)
+                                                                                  vocab=vocab, log=log)
 
     return data, test_data, sentence_size, vocab_size, memory_size, word_idx
 
 
-def load_data_clicr(data_dir, ent_setup, max_n_load=None):
+def load_data_clicr(data_dir, ent_setup, log, max_n_load=None):
     train_data, _ = load_clicr(data_dir + "train1.0.json", ent_setup, max_n_load=max_n_load)
     val_data, _ = load_clicr(data_dir + "dev1.0.json", ent_setup, remove_notfound=False, max_n_load=max_n_load)
     test_data, _ = load_clicr(data_dir + "test1.0.json", ent_setup, remove_notfound=False, max_n_load=max_n_load)
@@ -131,6 +131,7 @@ def load_data_clicr(data_dir, ent_setup, max_n_load=None):
 def load_json(filename):
     with open(filename) as in_f:
         return json.load(in_f)
+
 
 def load_clicr(fn, ent_setup="ent", remove_notfound=True, max_n_load=None):
     questions = []
@@ -400,7 +401,7 @@ def tokenize(sent):
     return [x.strip() for x in re.split('(\W+)?', sent) if x.strip()]
 
 
-def calculate_parameter_values(data, debug, memory_size, vocab):
+def calculate_parameter_values(data, debug, memory_size, vocab, log):
     word_idx = dict((c, i + 1) for i, c in enumerate(vocab))
     max_story_size = max(map(len, (s for s, _, _ in data)))
     mean_story_size = int(np.mean(list(map(len, (s for s, _, _ in data)))))
@@ -410,14 +411,14 @@ def calculate_parameter_values(data, debug, memory_size, vocab):
     vocab_size = len(word_idx) + 1  # +1 for nil word
     sentence_size = max(query_size, sentence_size)  # for the position
     if debug is True:
-        print("Longest sentence length: ", sentence_size)
-        print("Longest story length: ", max_story_size)
-        print("Average story length: ", mean_story_size)
-        print("Average memory size: ", memory_size)
+        log.info("Longest sentence length: {}".format(sentence_size))
+        log.info("Longest story length: {}".format(max_story_size))
+        log.info("Average story length: {}".format(mean_story_size))
+        log.info("Average memory size: {}".format(memory_size))
     return memory_size, sentence_size, vocab_size, word_idx
 
 
-def calculate_parameter_values_clicr(data, debug, memory_size, vocab):
+def calculate_parameter_values_clicr(data, debug, memory_size, vocab, log):
     word_idx = dict((c, i + 1) for i, c in enumerate(vocab))
     max_story_size = max(map(len, (s for s, _, _, _, _, _ in data)))
     mean_story_size = int(np.mean(list(map(len, (s for s, _, _, _, _, _ in data)))))
@@ -427,37 +428,37 @@ def calculate_parameter_values_clicr(data, debug, memory_size, vocab):
     vocab_size = len(word_idx) + 1  # +1 for nil word
     sentence_size = max(query_size, sentence_size)  # for the position
     if debug is True:
-        print("Longest sentence length: ", sentence_size)
-        print("Longest story length: ", max_story_size)
-        print("Average story length: ", mean_story_size)
-        print("Average memory size: ", memory_size)
+        log.info("Longest sentence length: {}".format(sentence_size))
+        log.info("Longest story length: {}".format(max_story_size))
+        log.info("Average story length: {}".format(mean_story_size))
+        log.info("Average memory size: {}".format(memory_size))
     return memory_size, sentence_size, vocab_size, word_idx
 
 
 def vectorize_task_data(batch_size, data, debug, memory_size, random_state, sentence_size, test,
-                        test_size, word_idx):
+                        test_size, word_idx, log):
     S, Q, Y = vectorize_data(data, word_idx, sentence_size, memory_size)
 
     if debug is True:
-        print("S : ", S)
-        print("Q : ", Q)
-        print("Y : ", Y)
+        log.info("S : {}".format(S))
+        log.info("Q : {}".format(Q))
+        log.info("Y : {}".format(Y))
     trainS, valS, trainQ, valQ, trainY, valY = model_selection.train_test_split(S, Q, Y, test_size=test_size,
                                                                                 random_state=random_state)
     testS, testQ, testY = vectorize_data(test, word_idx, sentence_size, memory_size)
 
     if debug is True:
-        print(S[0].shape, Q[0].shape, Y[0].shape)
-        print("Training set shape", trainS.shape)
+        log.info("{}\n{}\n{}".format(S[0].shape, Q[0].shape, Y[0].shape))
+        log.info("Training set shape {}".format(trainS.shape))
 
     # params
     n_train = trainS.shape[0]
     n_val = valS.shape[0]
     n_test = testS.shape[0]
     if debug is True:
-        print("Training Size: ", n_train)
-        print("Validation Size: ", n_val)
-        print("Testing Size: ", n_test)
+        log.info("Training Size: {}".format(n_train))
+        log.info("Validation Size: {}".format(n_val))
+        log.info("Testing Size: {}".format(n_test))
     train_labels = np.argmax(trainY, axis=1)
     test_labels = np.argmax(testY, axis=1)
     val_labels = np.argmax(valY, axis=1)
@@ -466,9 +467,9 @@ def vectorize_task_data(batch_size, data, debug, memory_size, random_state, sent
     n_test_labels = test_labels.shape[0]
 
     if debug is True:
-        print("Training Labels Size: ", n_train_labels)
-        print("Validation Labels Size: ", n_val_labels)
-        print("Testing Labels Size: ", n_test_labels)
+        log.info("Training Labels Size: {}".format(n_train_labels))
+        log.info("Validation Labels Size: {}".format(n_val_labels))
+        log.info("Testing Labels Size: {}".format(n_test_labels))
 
     train_batches = zip(range(0, n_train - batch_size, batch_size), range(batch_size, n_train, batch_size))
     val_batches = zip(range(0, n_val - batch_size, batch_size), range(batch_size, n_val, batch_size))
@@ -642,7 +643,7 @@ def construct_s_q_a_batch(batches, batched_objects, S, Q, A):
     return batched_objects
 
 
-def process_eval_data(data_dir, task_num, word_idx, sentence_size, vocab_size, memory_size=50, batch_size=2,
+def process_eval_data(data_dir, task_num, word_idx, sentence_size, vocab_size, log, memory_size=50, batch_size=2,
                       test_size=.1, debug=True, joint_training=0):
     random_state = None
     data, test, vocab = load_data(data_dir, joint_training, task_num)
@@ -653,7 +654,7 @@ def process_eval_data(data_dir, task_num, word_idx, sentence_size, vocab_size, m
                                                                                       vocab=vocab)
     train_set, train_batches, val_set, val_batches, test_set, test_batches = \
         vectorize_task_data(batch_size, data, debug, memory_size, random_state,
-                            sentence_size, test, test_size, word_idx)
+                            sentence_size, test, test_size, word_idx, log)
 
     return train_batches, val_batches, test_batches, train_set, val_set, test_set, \
            sentence_size, vocab_size, memory_size, word_idx
