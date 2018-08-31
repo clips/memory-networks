@@ -31,6 +31,8 @@ def train_network(train_batches_id, val_batches_id, test_batches_id, data, val_d
     running_loss = 0.0
     best_val_acc_yet = 0.0
     for current_epoch in range(args.epochs):
+        if current_epoch ==28:
+            print()
         train_batch_gen = vectorized_batches(train_batches_id, data, word_idx, sentence_size, story_size, vectorizer)
         current_len = 0
         current_correct = 0
@@ -44,7 +46,7 @@ def train_network(train_batches_id, val_batches_id, test_batches_id, data, val_d
             current_correct, current_len = update_counts(current_correct, current_len, idx_out, idx_true)
             optimizer.step()
             optimizer.zero_grad()
-            print("Batch {}/{}.".format(n, len(train_batches_id)))
+            #print("Batch {}/{}.".format(n, len(train_batches_id)))
 
         if current_epoch % args.log_epochs == 0:
             accuracy = 100 * (current_correct / current_len)
@@ -165,6 +167,8 @@ def main():
     arg_parser.add_argument("--lr", type=float, default=0.01, help="learning rate, default: 0.01")
     arg_parser.add_argument("--max_n_load", type=int, help="maximum number of clicr documents to use, for debugging")
     arg_parser.add_argument("--memory-size", type=int, default=50, help="upper limit on memory size, default: 50")
+    arg_parser.add_argument("--pretrained-word-embed", type=str, default="/nas/corpora/accumulate/clicr/embeddings/4bfb98c2-688e-11e7-aa74-901b0e5592c8/embeddings",
+                            help="path to the txt file with word embeddings")
     arg_parser.add_argument("--saved-model-dir", type=str, default="./saved/", help="path to folder where trained model will be saved.")
     arg_parser.add_argument("--task-number", type=int, default=1, help="Babi task to process, default: 1")
     arg_parser.add_argument("--train", type=int, default=1)

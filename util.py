@@ -677,7 +677,12 @@ def get_position_encoding(batch_size, sentence_size, embedding_size):
     return enc_vec
 
 
+
 def weight_update(name, param):
     update = param.grad
     weight = param.data
     print(name, (torch.norm(update) / torch.norm(weight)).data[0])
+
+
+def load_emb(fn):
+    pass
