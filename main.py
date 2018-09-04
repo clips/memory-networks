@@ -8,14 +8,14 @@ from torch.nn.utils import clip_grad_norm
 
 from logger import get_logger
 from net import N2N
-from util import long_tensor_type, vectorize_data_clicr, vectorized_batches, vectorize_data
+from util import long_tensor_type, vectorize_data_clicr, vectorized_batches, vectorize_data, evaluate_clicr, save_json, \
+    load_clicr, get_q_ids_clicr
 from util import process_data, process_data_clicr, get_batch_from_batch_list
 
 
 def train_network(train_batches_id, val_batches_id, test_batches_id, data, val_data, test_data, word_idx, sentence_size,
-                  vocab_size, story_size,
-                  save_model_path, args, log):
-    net = N2N(args.batch_size, args.embed_size, vocab_size, args.hops, story_size=story_size, args=args)
+                  vocab_size, story_size, save_model_path, args, log):
+    net = N2N(args.batch_size, args.embed_size, vocab_size, args.hops, story_size=story_size, args=args, word_idx=word_idx)
     if torch.cuda.is_available() and args.cuda == 1:
         net = net.cuda()
     criterion = torch.nn.CrossEntropyLoss()
@@ -113,21 +113,45 @@ def calculate_loss_and_accuracy(net, batches_id, data, word_idx, sentence_size, 
     return 100 * (current_correct / current_len)
 
 
-def eval_network(vocab_size, story_size, model, test_batches, test, log, EMBED_SIZE=50, batch_size=2,
-                 depth=1, cuda=0):
+def eval_network(vocab_size, story_size, sentence_size, model, word_idx, test_batches_id, test, log, logdir, args, cuda=0., test_q_ids=None):
     log.info("Evaluating")
-    net = N2N(batch_size, EMBED_SIZE, vocab_size, depth, story_size=story_size)
+    net = N2N(args.batch_size, args.embed_size, vocab_size, args.hops, story_size=story_size, args=args, word_idx=word_idx)
     net.load_state_dict(torch.load(model))
     if torch.cuda.is_available() and cuda == 1:
         net = net.cuda()
-    test_batches = get_batch_from_batch_list(test_batches, test)
-
+    if args.dataset == "clicr":
+        vectorizer = vectorize_data_clicr
+    elif args.dataset == "babi":
+        vectorizer = vectorize_data
+    else:
+        raise NotImplementedError
+    test_batch_gen = vectorized_batches(test_batches_id, test, word_idx, sentence_size, story_size, vectorizer)
     current_len = 0
     current_correct = 0
+    preds = {} if args.dataset == "clicr" else None
+    inv_word_idx = {v: k for k, v in word_idx.items()}
 
-    for batch in test_batches:
+    for batch, (s_batch, _) in zip(test_batch_gen, test_batches_id):
         idx_out, idx_true, out = epoch(batch, net)
+        if preds is not None:
+            for c, i in enumerate(idx_out):
+                # {query_id: answer}
+                preds[test[s_batch+c][5]] = inv_word_idx[i.item()]
+
         current_correct, current_len = update_counts(current_correct, current_len, idx_out, idx_true)
+
+    # produce dummy predictions for query ids that were not classified by the model
+    missing = test_q_ids - preds.keys()
+    log.info("{} predictions missing out of {}.".format(len(missing), len(test_q_ids)))
+    for q_id in missing:
+        preds[q_id] = ""
+
+    if preds is not None and args.dataset == "clicr":
+        test_file = args.data_dir + "test1.0.json"
+        preds_file = logdir + "/preds.json"
+        save_json(preds, preds_file)
+        results = evaluate_clicr(test_file, preds_file, extended=True, downcase=True)
+        log.info(results.decode())
 
     accuracy = 100 * (current_correct / current_len)
     log.info("Accuracy : {}".format(accuracy))
@@ -165,6 +189,7 @@ def main():
                             help="will prevent the pretrained word embeddings from being updated")
     arg_parser.add_argument("--hops", type=int, default=1, help="Number of hops to make: 1, 2 or 3; default: 1 ")
     arg_parser.add_argument("--joint-training", type=int, default=0, help="joint training flag, default: 0")
+    arg_parser.add_argument("--load-model-path", type=str)
     arg_parser.add_argument("--log-epochs", type=int, default=4,
                             help="Number of epochs after which to log progress, default: 4")
     arg_parser.add_argument("--lr", type=float, default=0.01, help="learning rate, default: 0.01")
@@ -177,14 +202,21 @@ def main():
     arg_parser.add_argument("--train", type=int, default=1)
 
     args = arg_parser.parse_args()
-
+    if args.dataset == "clicr" and args.eval==1: # load all gold query ids in the test
+        test_q_ids = get_q_ids_clicr(args.data_dir + "/test1.0.json")
+    if args.eval == 1:
+        args.save_model = True
     exp_dir = "./experiments/"
     if not os.path.exists(exp_dir):
         os.makedirs(exp_dir)
-    logdir = "{}{}".format(exp_dir, datetime.now().strftime("%Y%m%d_%H%M%S_%f"))
-    if not os.path.exists(logdir):
-        os.makedirs(logdir)
-    log = get_logger(logdir + "/log")
+    if args.train == 0 and args.eval == 1:
+        logdir = os.path.dirname(args.load_model_path)
+        log = get_logger(logdir + "/log_eval")
+    else:
+        logdir = "{}{}".format(exp_dir, datetime.now().strftime("%Y%m%d_%H%M%S_%f"))
+        if not os.path.exists(logdir):
+            os.makedirs(logdir)
+        log = get_logger(logdir + "/log")
     for argk, argv in sorted(vars(args).items()):
         log.info("{}: {}".format(argk, argv))
     log.info("")
@@ -214,13 +246,12 @@ def main():
             train_network(train_batches_id, val_batches_id, test_batches_id, data, val_data, test_data, word_idx,
                           sentence_size, story_size=story_size,
                           vocab_size=vocab_size, save_model_path=save_model_path, args=args, log=log)
-
-        # if args.eval == 1:
-        #    model = save_model_path
-        #    eval_network(story_size=story_size, vocab_size=vocab_size,
-        #                 log=log, EMBED_SIZE=args.embed_size, batch_size=args.batch_size, depth=args.hops,
-        #                 model=model, test_batches=test_batches, test=test_set, cuda=args.cuda)
-
+        if args.eval == 1:
+            if args.train == 1:
+                model = save_model_path
+            else:
+                model = args.load_model_path
+            eval_network(vocab_size, story_size, sentence_size, model, word_idx, test_batches_id, test_data, log, logdir, args, cuda=args.cuda, test_q_ids=test_q_ids)
     elif args.dataset == "babi":
         data, test_data, sentence_size, vocab_size, story_size, word_idx = process_data(args)
         # get batch indices
@@ -238,12 +269,12 @@ def main():
                           sentence_size, story_size=story_size,
                           vocab_size=vocab_size, save_model_path=save_model_path, args=args, log=log)
 
-        # if args.eval == 1:
-        #    model = save_model_path
-        #    eval_network(story_size=story_size, vocab_size=vocab_size,
-        #                 log=log, EMBED_SIZE=args.embed_size, batch_size=args.batch_size, depth=args.hops,
-        #                 model=model, test_batches=test_batches, test=test_set, cuda=args.cuda, log=log)
-
+        if args.eval == 1:
+            if args.train == 1:
+                model = save_model_path
+            else:
+                model = args.load_model_path
+            eval_network(vocab_size, story_size, sentence_size, model, word_idx, test_batches_id, test_data, log, logdir, args, cuda=args.cuda)
     else:
         raise ValueError
 

@@ -1,18 +1,16 @@
-from memory_profiler import profile
-
 import functools
 import json
 import os
 import re
-import sys
+import subprocess
 from functools import reduce
 from itertools import chain
 
 import numpy as np
 import torch
-from torch import nn
 from sklearn import model_selection
 from sklearn.metrics import jaccard_similarity_score
+from torch import nn
 from torch.autograd import Variable
 
 """
@@ -73,11 +71,10 @@ def process_data_clicr(args, log):
     ]
     '''
     memory_size, sentence_size, vocab_size, word_idx = calculate_parameter_values_clicr(data=data, debug=args.debug,
-                                                                                  memory_size=args.memory_size,
-                                                                                  vocab=vocab, log=log)
+                                                                                        memory_size=args.memory_size,
+                                                                                        vocab=vocab, log=log)
     if args.debug:
         log.info("Vocabulary Size: {}".format(vocab_size))
-
 
     return data, val_data, test_data, sentence_size, vocab_size, memory_size, word_idx
 
@@ -131,6 +128,22 @@ def load_data_clicr(data_dir, ent_setup, log, max_n_load=None):
 def load_json(filename):
     with open(filename) as in_f:
         return json.load(in_f)
+
+
+def save_json(obj, filename):
+    with open(filename, "w") as out:
+        json.dump(obj, out, separators=(',', ':'))
+
+
+def get_q_ids_clicr(fn):
+    q_ids = set()
+    dataset = load_json(fn)
+    data = dataset[DATA_KEY]
+    for datum in data:
+        for qa in datum[DOC_KEY][QAS_KEY]:
+            q_ids.add(qa[ID_KEY])
+
+    return q_ids
 
 
 def load_clicr(fn, ent_setup="ent", remove_notfound=True, max_n_load=None):
@@ -203,10 +216,10 @@ def load_clicr(fn, ent_setup="ent", remove_notfound=True, max_n_load=None):
                           to_entities(datum[DOC_KEY][TITLE_KEY] + "\n" + datum[DOC_KEY][CONTEXT_KEY]).lower().split() if
                           w.startswith('@entity')]
                 cand_raw = [e[len("@entity"):].split("_") for e in cand_e]
-                #document = remove_entity_marks(datum[DOC_KEY][TITLE_KEY] + "\n" + datum[DOC_KEY][CONTEXT_KEY])
-                #document = document.lower()
-                #doc_raw = document.split()
-                #sents = document.split("\n")
+                # document = remove_entity_marks(datum[DOC_KEY][TITLE_KEY] + "\n" + datum[DOC_KEY][CONTEXT_KEY])
+                # document = document.lower()
+                # doc_raw = document.split()
+                # sents = document.split("\n")
                 sents = []
                 for sent in (datum[DOC_KEY][TITLE_KEY] + "\n" + datum[DOC_KEY][CONTEXT_KEY]).split("\n"):
                     if sent:
@@ -410,7 +423,7 @@ def calculate_parameter_values(data, debug, memory_size, vocab, log):
     memory_size = min(memory_size, max_story_size)
     vocab_size = len(word_idx) + 1  # +1 for nil word
     sentence_size = max(query_size, sentence_size)  # for the position
-    if debug is True:
+    if debug:
         log.info("Longest sentence length: {}".format(sentence_size))
         log.info("Longest story length: {}".format(max_story_size))
         log.info("Average story length: {}".format(mean_story_size))
@@ -439,7 +452,7 @@ def vectorize_task_data(batch_size, data, debug, memory_size, random_state, sent
                         test_size, word_idx, log):
     S, Q, Y = vectorize_data(data, word_idx, sentence_size, memory_size)
 
-    if debug is True:
+    if debug:
         log.info("S : {}".format(S))
         log.info("Q : {}".format(Q))
         log.info("Y : {}".format(Y))
@@ -447,7 +460,7 @@ def vectorize_task_data(batch_size, data, debug, memory_size, random_state, sent
                                                                                 random_state=random_state)
     testS, testQ, testY = vectorize_data(test, word_idx, sentence_size, memory_size)
 
-    if debug is True:
+    if debug:
         log.info("{}\n{}\n{}".format(S[0].shape, Q[0].shape, Y[0].shape))
         log.info("Training set shape {}".format(trainS.shape))
 
@@ -455,7 +468,7 @@ def vectorize_task_data(batch_size, data, debug, memory_size, random_state, sent
     n_train = trainS.shape[0]
     n_val = valS.shape[0]
     n_test = testS.shape[0]
-    if debug is True:
+    if debug:
         log.info("Training Size: {}".format(n_train))
         log.info("Validation Size: {}".format(n_val))
         log.info("Testing Size: {}".format(n_test))
@@ -466,7 +479,7 @@ def vectorize_task_data(batch_size, data, debug, memory_size, random_state, sent
     n_val_labels = val_labels.shape[0]
     n_test_labels = test_labels.shape[0]
 
-    if debug is True:
+    if debug:
         log.info("Training Labels Size: {}".format(n_train_labels))
         log.info("Validation Labels Size: {}".format(n_val_labels))
         log.info("Testing Labels Size: {}".format(n_test_labels))
@@ -679,18 +692,16 @@ def get_position_encoding(batch_size, sentence_size, embedding_size):
     return enc_vec
 
 
-
 def weight_update(name, param):
     update = param.grad
     weight = param.data
     print(name, (torch.norm(update) / torch.norm(weight)).data[0])
 
 
-def load_w2v(fn):
-    ws = []
+def load_w2v(fn, word_idx):
     with open(fn) as fh:
-        m, n = map(eval, fh.readline().strip().split())
-        e_m = np.zeros((m, n))
+        _, n = map(eval, fh.readline().strip().split())
+        e_m = np.zeros((len(word_idx)+1, n))
         for c, l in enumerate(fh):
             w, *e = l.strip().split()
             if len(e) != n:
@@ -698,14 +709,25 @@ def load_w2v(fn):
                 continue
             if not w or not e:
                 print("Empty w or e.")
-            ws.append(w)
-            e_m[c] = e
-
+            if w not in word_idx:
+                continue
+            pos = word_idx[w]
+            e_m[pos] = e
     return e_m, n
 
 
-def load_emb(fn, freeze=False):
-    embs, dim = load_w2v(fn)
+def load_emb(fn, word_idx, freeze=False):
+    embs, dim = load_w2v(fn, word_idx)
     embs_tensor = nn.Embedding.from_pretrained(float_tensor_type(embs), freeze=freeze)
 
     return embs_tensor, dim
+
+
+def evaluate_clicr(test_file, preds_file, extended=False,
+                   emb_file="/nas/corpora/accumulate/clicr/embeddings/b2257916-6a9f-11e7-aa74-901b0e5592c8/embeddings",
+                   downcase=True):
+    results = subprocess.check_output(
+        "python3 ~/Apps/bmj_case_reports/evaluate.py -test_file {test_file} -prediction_file {preds_file} -embeddings_file {emb_file} {downcase} {extended}".format(
+            test_file=test_file, preds_file=preds_file, emb_file=emb_file, downcase="-downcase" if downcase else "",
+            extended="-extended" if extended else ""), shell=True)
+    return results

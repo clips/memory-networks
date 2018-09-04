@@ -7,7 +7,7 @@ from util import get_position_encoding, long_tensor_type, load_emb
 
 
 class N2N(torch.nn.Module):
-    def __init__(self, batch_size, embed_size, vocab_size, hops, story_size, args):
+    def __init__(self, batch_size, embed_size, vocab_size, hops, story_size, args, word_idx):
         super(N2N, self).__init__()
 
         self.embed_size = embed_size
@@ -16,6 +16,7 @@ class N2N(torch.nn.Module):
         self.hops = hops
         self.pretrained_word_embed = args.pretrained_word_embed
         self.freeze_pretrained_word_embed = args.freeze_pretrained_word_embed
+        self.word_idx = word_idx
 
         if self.hops <= 0:
             raise ValueError("Number of hops have to be greater than 0")
@@ -25,7 +26,7 @@ class N2N(torch.nn.Module):
 
         # story and query embedding
         if args.pretrained_word_embed:
-            self.A1, dim = load_emb(args.pretrained_word_embed, freeze=args.freeze_pretrained_word_embed)
+            self.A1, dim = load_emb(args.pretrained_word_embed, self.word_idx, freeze=args.freeze_pretrained_word_embed)
             assert dim == self.embed_size
         else:
             self.A1 = nn.Embedding(vocab_size, embed_size)
@@ -37,7 +38,7 @@ class N2N(torch.nn.Module):
         # for 1 hop:
         # for >1 hop:
         if args.pretrained_word_embed:
-            self.A2, dim = load_emb(args.pretrained_word_embed, freeze=args.freeze_pretrained_word_embed)
+            self.A2, dim = load_emb(args.pretrained_word_embed, self.word_idx, freeze=args.freeze_pretrained_word_embed)
             assert dim == self.embed_size
         else:
             self.A2 = nn.Embedding(vocab_size, embed_size)
@@ -46,7 +47,7 @@ class N2N(torch.nn.Module):
 
         if self.hops >= 2:
             if args.pretrained_word_embed:
-                self.A3, dim = load_emb(args.pretrained_word_embed, freeze=args.freeze_pretrained_word_embed)
+                self.A3, dim = load_emb(args.pretrained_word_embed, self.word_idx, freeze=args.freeze_pretrained_word_embed)
                 assert dim == self.embed_size
             else:
                 self.A3 = nn.Embedding(vocab_size, embed_size)
@@ -56,7 +57,7 @@ class N2N(torch.nn.Module):
 
         if self.hops >= 3:
             if args.pretrained_word_embed:
-                self.A4, dim = load_emb(args.pretrained_word_embed, freeze=args.freeze_pretrained_word_embed)
+                self.A4, dim = load_emb(args.pretrained_word_embed, self.word_idx, freeze=args.freeze_pretrained_word_embed)
                 assert dim == self.embed_size
             else:
                 self.A4 = nn.Embedding(vocab_size, embed_size)
