@@ -24,7 +24,7 @@ class N2N(torch.nn.Module):
         if self.hops > 3:
             raise ValueError("Number of hops should be less than 4")
 
-        # story and query embedding
+        # story embedding
         if args.pretrained_word_embed:
             self.A1, dim = load_emb(args.pretrained_word_embed, self.word_idx, freeze=args.freeze_pretrained_word_embed)
             assert dim == self.embed_size
@@ -32,9 +32,18 @@ class N2N(torch.nn.Module):
             self.A1 = nn.Embedding(vocab_size, embed_size)
             self.A1.weight = nn.Parameter(torch.randn(vocab_size, embed_size).normal_(0, 0.1))
 
+        """
+        # query embedding
+        if args.pretrained_word_embed:
+            self.B1, dim = load_emb(args.pretrained_word_embed, self.word_idx,
+                                    freeze=args.freeze_pretrained_word_embed)
+            assert dim == self.embed_size
+        else:
+            self.B1 = nn.Embedding(vocab_size, embed_size)
+            self.B1.weight = nn.Parameter(torch.randn(vocab_size, embed_size).normal_(0, 0.1))
         # temporal encoding
         # self.TA = nn.Parameter(torch.randn(self.batch_size, self.story_size, self.embed_size).normal_(0, 0.1))
-
+        """
         # for 1 hop:
         # for >1 hop:
         if args.pretrained_word_embed:
@@ -44,7 +53,16 @@ class N2N(torch.nn.Module):
             self.A2 = nn.Embedding(vocab_size, embed_size)
             self.A2.weight = nn.Parameter(torch.randn(vocab_size, embed_size).normal_(0, 0.1))
         # self.TA2 = nn.Parameter(torch.randn(self.batch_size, self.story_size, self.embed_size).normal_(0, 0.1))
-
+        """
+        # query embedding
+        if args.pretrained_word_embed:
+            self.B2, dim = load_emb(args.pretrained_word_embed, self.word_idx,
+                                    freeze=args.freeze_pretrained_word_embed)
+            assert dim == self.embed_size
+        else:
+            self.B2 = nn.Embedding(vocab_size, embed_size)
+            self.B2.weight = nn.Parameter(torch.randn(vocab_size, embed_size).normal_(0, 0.1))
+        """
         if self.hops >= 2:
             if args.pretrained_word_embed:
                 self.A3, dim = load_emb(args.pretrained_word_embed, self.word_idx, freeze=args.freeze_pretrained_word_embed)
@@ -68,8 +86,10 @@ class N2N(torch.nn.Module):
         # self.W = nn.Parameter(torch.randn(embed_size, vocab_size), requires_grad=True)
         self.nonlin = nn.Tanh()
         self.lin = nn.Linear(embed_size, embed_size)
-        self.lin2 = nn.Linear(embed_size, embed_size)
+        self.lin_bn = nn.BatchNorm1d(embed_size)
+        #self.lin2 = nn.Linear(embed_size, embed_size)
         self.lin_final = nn.Linear(embed_size, vocab_size)
+        #self.lin_final_bn = nn.BatchNorm1d(vocab_size)
 
     def forward(self, trainS, trainQ, trainVM):
         """
@@ -79,6 +99,7 @@ class N2N(torch.nn.Module):
         Q = Variable(torch.squeeze(trainQ, 1), requires_grad=False)
 
         queries_emb = self.A1(Q)
+        #queries_emb = self.B1(Q)
         position_encoding = get_position_encoding(queries_emb.size(0), queries_emb.size(1), self.embed_size)
         queries = queries_emb * position_encoding
         queries_sum = torch.sum(queries, dim=1)
@@ -97,10 +118,12 @@ class N2N(torch.nn.Module):
 
         # wx = torch.mm(w_u, self.W)
         wx = self.lin(w_u)
+        wx = self.lin_bn(wx)
         wx = self.nonlin(wx)
         # wx = self.lin2(w_u)
         # wx = self.nonlin(wx)
         wx = self.lin_final(wx)
+        #wx = self.lin_final_bn(wx)
 
         # Final layer
         y_pred = wx

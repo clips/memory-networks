@@ -623,8 +623,10 @@ def get_batch_from_batch_list(batches_tr, train):
     return train_batches
 
 
-def vectorized_batches(batches, data, word_idx, sentence_size, memory_size, vectorizer=vectorize_data):
+def vectorized_batches(batches, data, word_idx, sentence_size, memory_size, vectorizer=vectorize_data, shuffle=False):
     # batches are of form : [(0,2), (2,4),...]
+    if shuffle:
+        np.random.shuffle(batches)
     for s_batch, e_batch in batches:
         dataS, dataQ, dataA, dataVM = vectorizer(data[s_batch:e_batch], word_idx, sentence_size, memory_size)
         dataA, dataQ, dataS, dataVM = extract_tensors(dataA, dataQ, dataS, dataVM)

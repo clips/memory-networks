@@ -36,9 +36,11 @@ def train_network(train_batches_id, val_batches_id, test_batches_id, data, val_d
     running_loss = 0.0
     best_val_acc_yet = 0.0
     for current_epoch in range(args.epochs):
-        train_batch_gen = vectorized_batches(train_batches_id, data, word_idx, sentence_size, story_size, vectorizer)
+        train_batch_gen = vectorized_batches(train_batches_id, data, word_idx, sentence_size, story_size, vectorizer, shuffle=args.shuffle)
         current_len = 0
         current_correct = 0
+        if current_epoch == 9:
+            print()
         for batch, n in zip(train_batch_gen, train_batches_id):
             idx_out, idx_true, out = epoch(batch, net)
             loss = criterion(out, idx_true)
@@ -198,6 +200,7 @@ def main():
     arg_parser.add_argument("--pretrained-word-embed", type=str,
                             help="path to the txt file with word embeddings")  # "/nas/corpora/accumulate/clicr/embeddings/4bfb98c2-688e-11e7-aa74-901b0e5592c8/embeddings"
     arg_parser.add_argument("--save-model", action="store_true")
+    arg_parser.add_argument("--shuffle", action="store_true")
     arg_parser.add_argument("--task-number", type=int, default=1, help="Babi task to process, default: 1")
     arg_parser.add_argument("--train", type=int, default=1)
 
