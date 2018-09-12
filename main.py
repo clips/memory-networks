@@ -40,8 +40,6 @@ def train_network(train_batches_id, val_batches_id, test_batches_id, data, val_d
         train_batch_gen = vectorized_batches(train_batches_id, data, word_idx, sentence_size, story_size, vectorizer, shuffle=args.shuffle)
         current_len = 0
         current_correct = 0
-        if current_epoch == 9:
-            print()
         for batch, n in zip(train_batch_gen, train_batches_id):
             idx_out, idx_true, out = epoch(batch, net)
             loss = criterion(out, idx_true)
@@ -76,6 +74,9 @@ def epoch(batch, net):
     query_batch = batch[1]
     answer_batch = batch[2]
     vocabmask_batch = batch[3]
+    pasmask_batch = batch[4]
+    sentmask_batch = batch[5]
+    querymask_batch = batch[6]
 
     A = Variable(torch.stack(answer_batch, dim=0), requires_grad=False).type(long_tensor_type)
     _, idx_true = torch.max(A, 1)
@@ -83,11 +84,12 @@ def epoch(batch, net):
 
     S = torch.stack(story_batch, dim=0)
     Q = torch.stack(query_batch, dim=0)
-    if vocabmask_batch is not None:
-        VM = torch.stack(vocabmask_batch, dim=0)
-    else:
-        VM = None
-    out = net(S, Q, VM)
+    VM = torch.stack(vocabmask_batch, dim=0) if vocabmask_batch is not None else None
+    PM = torch.stack(pasmask_batch, dim=0) if pasmask_batch is not None else None
+    SM = torch.stack(sentmask_batch, dim=0) if sentmask_batch is not None else None
+    QM = torch.stack(querymask_batch, dim=0) if querymask_batch is not None else None
+
+    out = net(S, Q, VM, PM, SM, QM)
 
     _, idx_out = torch.max(out, 1)
     return idx_out, idx_true, out

@@ -507,6 +507,11 @@ def vectorize_data(data, word_idx, sentence_size, memory_size):
     S = []
     Q = []
     A = []
+    VM = None  # vocabulary mask
+    PL = None  # passage lengths
+    SL = None  # sentences lengths
+    QL = None  # query lengths
+
     for story, query, answer in data:
         lq = max(0, sentence_size - len(query))
         q = [word_idx[w] for w in query] + [0] * lq
@@ -540,7 +545,7 @@ def vectorize_data(data, word_idx, sentence_size, memory_size):
         S.append(ss)
         Q.append(q)
         A.append(y)
-    return np.array(S), np.array(Q), np.array(A), None
+    return np.array(S), np.array(Q), np.array(A), VM, PL, SL, QL
 
 
 def vectorize_data_clicr(data, word_idx, sentence_size, memory_size):
@@ -556,23 +561,33 @@ def vectorize_data_clicr(data, word_idx, sentence_size, memory_size):
 
     vocab_mask marks which elements (=words/entities) in V are found in the particular document
 
+    We also keep track of lengths of passages, sentences and queries, so that we can mask during
+    vectorization the padded parts and ignore them in computation
+
     '''
     S = []
     Q = []
     A = []
     VM = []  # vocabulary mask
+    PM = []  # passage mask
+    SM = []  # sentences mask
+    QM = []  # query mask
 
     for story, query, answer, _, _, _ in data:
         lq = max(0, sentence_size - len(query))
         q = [word_idx[w] for w in query] + [0] * lq
 
         ss = []
-        for i, sentence in enumerate(story, 1):
+        #ss_len = []
+        for sentence in story:
             ls = max(0, sentence_size - len(sentence))
             sent = [word_idx[w] for w in sentence] + [0] * ls
+            #sent_m = [1.] * len(sentence) + [0.] * ls
             if len(sent) > sentence_size:  # can happen in test/val as sentence_size is calculated on train
                 sent = sent[:sentence_size]
+                #sent_m = sent_m[:sentence_size]
             ss.append(sent)
+            #ss_len.append(sent_m)
 
         if len(ss) > memory_size:
             # TODO this is currently problematic as it relies on simple word match
@@ -584,13 +599,17 @@ def vectorize_data_clicr(data, word_idx, sentence_size, memory_size):
             for sent in least_like_q:
                 # Remove the first occurrence of sent. A list comprehension as in [sent for sent in ss if sent not in least_like_q]
                 # should not be used, as it would remove multiple occurrences of the same sentence, some of which might actually make the cutoff.
+                #del_id = ss.index(sent)
                 ss.remove(sent)
+                #del ss_len[del_id]
+            p_m = [1.] * memory_size
         else:
             # pad to memory_size
             lm = max(0, memory_size - len(ss))
+            p_m = [1.] * len(ss) + [0.] * lm
             for _ in range(lm):
                 ss.append([0] * sentence_size)
-
+                #ss_len.append([0.] * sentence_size)
         y = np.zeros(len(word_idx) + 1)  # 0 is reserved for nil word
         for a in answer:
             y[word_idx[a]] = 1
@@ -603,8 +622,11 @@ def vectorize_data_clicr(data, word_idx, sentence_size, memory_size):
         Q.append(q)
         A.append(y)
         VM.append(vm)
+        PM.append(p_m)
+        SM = np.clip(np.array(S), 0., 1.)
+        QM.append(np.clip(np.array(q), 0., 1.))
 
-    return np.array(S), np.array(Q), np.array(A), np.array(VM)
+    return np.array(S), np.array(Q), np.array(A), np.array(VM), np.array(PM), np.array(SM), np.array(QM)
 
 
 def generate_batches(batches_tr, batches_v, batches_te, train, val, test):
@@ -628,19 +650,29 @@ def vectorized_batches(batches, data, word_idx, sentence_size, memory_size, vect
     if shuffle:
         np.random.shuffle(batches)
     for s_batch, e_batch in batches:
-        dataS, dataQ, dataA, dataVM = vectorizer(data[s_batch:e_batch], word_idx, sentence_size, memory_size)
-        dataA, dataQ, dataS, dataVM = extract_tensors(dataA, dataQ, dataS, dataVM)
+        dataS, dataQ, dataA, dataVM, dataPM, dataSM, dataQM = vectorizer(data[s_batch:e_batch], word_idx, sentence_size, memory_size)
+        dataA, dataQ, dataS, dataVM, dataPM, dataSM, dataQM = extract_tensors(dataA, dataQ, dataS, dataVM, dataPM, dataSM, dataQM)
 
-        yield [list(dataS), list(dataQ), list(dataA), list(dataVM) if dataVM is not None else None]
+        yield [list(dataS),
+               list(dataQ),
+               list(dataA),
+               list(dataVM) if dataVM is not None else None,
+               list(dataPM) if dataPM is not None else None,
+               list(dataSM) if dataSM is not None else None,
+               list(dataQM) if dataQM is not None else None
+               ]
 
 
-def extract_tensors(A, Q, S, VM):
+def extract_tensors(A, Q, S, VM, PM, SM, QM):
     A = torch.from_numpy(A).type(long_tensor_type)
     S = torch.from_numpy(S).type(float_tensor_type)
     Q = np.expand_dims(Q, 1)
     Q = torch.from_numpy(Q).type(long_tensor_type)
     VM = torch.from_numpy(VM).type(float_tensor_type) if VM is not None else None
-    return A, Q, S, VM
+    PM = torch.from_numpy(PM).type(float_tensor_type) if PM is not None else None
+    SM = torch.from_numpy(SM).type(float_tensor_type) if SM is not None else None
+    QM = torch.from_numpy(QM).type(float_tensor_type) if QM is not None else None
+    return A, Q, S, VM, PM, SM, QM
 
 
 def construct_s_q_a_batch(batches, batched_objects, S, Q, A):
