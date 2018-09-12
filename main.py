@@ -18,7 +18,8 @@ def train_network(train_batches_id, val_batches_id, test_batches_id, data, val_d
     net = N2N(args.batch_size, args.embed_size, vocab_size, args.hops, story_size=story_size, args=args, word_idx=word_idx)
     if torch.cuda.is_available() and args.cuda == 1:
         net = net.cuda()
-    criterion = torch.nn.CrossEntropyLoss()
+    #criterion = torch.nn.CrossEntropyLoss()
+    criterion = torch.nn.NLLLoss()
     #for name, param in net.named_parameters():
     #    if param.requires_grad:
     #        log.info("{}\t{}".format(name, param.data))

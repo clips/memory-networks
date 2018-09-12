@@ -3,6 +3,7 @@ from torch import nn
 from torch.autograd import Variable
 from torch.nn import functional as F
 
+from net_util import masked_log_softmax
 from util import get_position_encoding, long_tensor_type, load_emb
 
 
@@ -127,11 +128,15 @@ class N2N(torch.nn.Module):
 
         # Final layer
         y_pred = wx
-        # y_pred = F.softmax(wx)
-        if trainVM is not None:
-            y_pred = y_pred * trainVM
+        # mask for output answers
 
-        return y_pred
+        #if trainVM is not None:
+        #    y_pred = y_pred * trainVM
+        #return y_pred
+
+        y_pred_m = trainVM
+        #y_pred_m = None
+        return masked_log_softmax(y_pred, y_pred_m)
 
     def hop(self, trainS, u_k_1, A_k, C_k):  # , temp_A_k, temp_C_k):
         mem_emb_A = self.embed_story(trainS, A_k)
