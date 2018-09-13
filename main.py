@@ -4,18 +4,23 @@ import os
 
 import torch
 from torch.autograd import Variable
-from torch.nn.utils import clip_grad_norm
+from torch.nn.utils import clip_grad_norm_
+import matplotlib.pyplot as plt
+import numpy as np
 
 from logger import get_logger
-from net import N2N
-from util import long_tensor_type, vectorize_data_clicr, vectorized_batches, vectorize_data, evaluate_clicr, save_json, \
-    load_clicr, get_q_ids_clicr
-from util import process_data, process_data_clicr, get_batch_from_batch_list
+from net import N2N, N2NInspect
+from util import long_tensor_type, vectorize_data_clicr, vectorized_batches, vectorize_data, evaluate_clicr, save_json, get_q_ids_clicr
+from util import process_data, process_data_clicr
 
 
 def train_network(train_batches_id, val_batches_id, test_batches_id, data, val_data, test_data, word_idx, sentence_size,
                   vocab_size, story_size, save_model_path, args, log):
-    net = N2N(args.batch_size, args.embed_size, vocab_size, args.hops, story_size=story_size, args=args, word_idx=word_idx)
+    if args.inspect:
+        net = N2NInspect(args.batch_size, args.embed_size, vocab_size, args.hops, story_size=story_size, args=args, word_idx=word_idx)
+        inv_word_idx = {v: k for k, v in word_idx.items()}
+    else:
+        net = N2N(args.batch_size, args.embed_size, vocab_size, args.hops, story_size=story_size, args=args, word_idx=word_idx)
     if torch.cuda.is_available() and args.cuda == 1:
         net = net.cuda()
     #criterion = torch.nn.CrossEntropyLoss()
@@ -41,11 +46,13 @@ def train_network(train_batches_id, val_batches_id, test_batches_id, data, val_d
         current_len = 0
         current_correct = 0
         for batch, n in zip(train_batch_gen, train_batches_id):
-            idx_out, idx_true, out = epoch(batch, net)
+            idx_out, idx_true, out, att_probs = epoch(batch, net, args.inspect)
+            if current_epoch == args.epochs - 1 and args.inspect:
+                inspect(out, idx_true, save_model_path, current_epoch, n, att_probs, inv_word_idx, data, args, log)
             loss = criterion(out, idx_true)
             loss.backward()
 
-            clip_grad_norm(net.parameters(), 40)
+            clip_grad_norm_(net.parameters(), 40)
             running_loss += loss
             current_correct, current_len = update_counts(current_correct, current_len, idx_out, idx_true)
             optimizer.step()
@@ -55,7 +62,7 @@ def train_network(train_batches_id, val_batches_id, test_batches_id, data, val_d
         if current_epoch % args.log_epochs == 0:
             accuracy = 100 * (current_correct / current_len)
             val_acc = calculate_loss_and_accuracy(net, val_batches_id, val_data, word_idx, sentence_size, story_size,
-                                                  vectorizer)
+                                                  vectorizer, args.inspect)
             log.info("Epochs: {}, Train Accuracy: {}, Loss: {}, Val_Acc:{}".format(current_epoch, accuracy,
                                                                                 running_loss.item(),
                                                                                 val_acc))
@@ -69,7 +76,7 @@ def train_network(train_batches_id, val_batches_id, test_batches_id, data, val_d
         running_loss = 0.0
 
 
-def epoch(batch, net):
+def epoch(batch, net, inspect=False):
     story_batch = batch[0]
     query_batch = batch[1]
     answer_batch = batch[2]
@@ -89,10 +96,13 @@ def epoch(batch, net):
     SM = torch.stack(sentmask_batch, dim=0) if sentmask_batch is not None else None
     QM = torch.stack(querymask_batch, dim=0) if querymask_batch is not None else None
 
-    out = net(S, Q, VM, PM, SM, QM)
+    if inspect:
+        out, att_probs = net(S, Q, VM, PM, SM, QM)
+    else:
+        out = net(S, Q, VM, PM, SM, QM)
 
     _, idx_out = torch.max(out, 1)
-    return idx_out, idx_true, out
+    return idx_out, idx_true, out, att_probs if inspect else None
 
 
 def update_counts(current_correct, current_len, idx_out, idx_true):
@@ -108,12 +118,12 @@ def count_predictions(labels, predicted):
     return batch_len, correct
 
 
-def calculate_loss_and_accuracy(net, batches_id, data, word_idx, sentence_size, story_size, vectorizer):
+def calculate_loss_and_accuracy(net, batches_id, data, word_idx, sentence_size, story_size, vectorizer, inspect=False):
     batch_gen = vectorized_batches(batches_id, data, word_idx, sentence_size, story_size, vectorizer)
     current_len = 0
     current_correct = 0
     for batch in batch_gen:
-        idx_out, idx_true, out = epoch(batch, net)
+        idx_out, idx_true, out, _ = epoch(batch, net, inspect)
         current_correct, current_len = update_counts(current_correct, current_len, idx_out, idx_true)
     return 100 * (current_correct / current_len)
 
@@ -173,6 +183,29 @@ def model_path(dir, args):
     return saved_model_path
 
 
+def inspect(out, idx_true, save_model_path, current_epoch, n, att_probs, inv_word_idx, data, args, log):
+    # take only the 1st instance from batch:
+    # attention prob distribution
+    assert not args.shuffle
+    inst_id = data[n[0]][5]
+    att = att_probs[0].detach().cpu().numpy()
+    log.info("\n{}\nQuery:\n{}".format(inst_id, " ".join(data[n[0]][1])))
+    log.info("\nPassage sentence with max. attention:\n{}\n".format(" ".join(data[n[0]][0][np.argmax(att)])))
+    plt.figure()
+    plt.plot(att)
+    plt.axvline(x=len(data[n[0]][0]), color="red")
+    plt.savefig("{}/{}_ep{}.png".format(os.path.dirname(save_model_path), inst_id, current_epoch),
+                bbox_inches='tight')
+    # top k probs and answer ids
+    out_probs, out_i = torch.topk(torch.exp(out[0]), 10)
+    out_ans = [inv_word_idx[i.item()] for i in out_i]
+    log.info("Gold answer: {}".format(inv_word_idx[idx_true[0].item()]))
+    log.info("Predicted (k-best):")
+    log.info("___________________")
+    for a, p in zip(out_ans, list(out_probs.detach().cpu().numpy())):
+        log.info("{}\t{}".format(a, p))
+
+
 def main():
     arg_parser = argparse.ArgumentParser(description="parser for End-to-End Memory Networks")
 
@@ -193,6 +226,7 @@ def main():
     arg_parser.add_argument("--freeze-pretrained-word-embed", action="store_true",
                             help="will prevent the pretrained word embeddings from being updated")
     arg_parser.add_argument("--hops", type=int, default=1, help="Number of hops to make: 1, 2 or 3; default: 1 ")
+    arg_parser.add_argument("--inspect", action="store_true", help="Flag to inspect attention and output distribution.")
     arg_parser.add_argument("--joint-training", type=int, default=0, help="joint training flag, default: 0")
     arg_parser.add_argument("--load-model-path", type=str)
     arg_parser.add_argument("--log-epochs", type=int, default=4,
@@ -223,6 +257,11 @@ def main():
         if not os.path.exists(logdir):
             os.makedirs(logdir)
         log = get_logger(logdir + "/log")
+    #if args.inspect:
+    #    log_inspect = get_logger(logdir + "/inspect")
+    #else:
+    #    log_inspect = None
+
     for argk, argv in sorted(vars(args).items()):
         log.info("{}: {}".format(argk, argv))
     log.info("")
