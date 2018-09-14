@@ -9,7 +9,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from logger import get_logger
-from net import N2N, N2NInspect
+from net import N2N
 from util import long_tensor_type, vectorize_data_clicr, vectorized_batches, vectorize_data, evaluate_clicr, save_json, get_q_ids_clicr
 from util import process_data, process_data_clicr
 
@@ -17,10 +17,8 @@ from util import process_data, process_data_clicr
 def train_network(train_batches_id, val_batches_id, test_batches_id, data, val_data, test_data, word_idx, sentence_size,
                   vocab_size, story_size, save_model_path, args, log):
     if args.inspect:
-        net = N2NInspect(args.batch_size, args.embed_size, vocab_size, args.hops, story_size=story_size, args=args, word_idx=word_idx)
         inv_word_idx = {v: k for k, v in word_idx.items()}
-    else:
-        net = N2N(args.batch_size, args.embed_size, vocab_size, args.hops, story_size=story_size, args=args, word_idx=word_idx)
+    net = N2N(args.batch_size, args.embed_size, vocab_size, args.hops, story_size=story_size, args=args, word_idx=word_idx)
     if torch.cuda.is_available() and args.cuda == 1:
         net = net.cuda()
     #criterion = torch.nn.CrossEntropyLoss()
@@ -45,13 +43,12 @@ def train_network(train_batches_id, val_batches_id, test_batches_id, data, val_d
         train_batch_gen = vectorized_batches(train_batches_id, data, word_idx, sentence_size, story_size, vectorizer, shuffle=args.shuffle)
         current_len = 0
         current_correct = 0
-        for batch, n in zip(train_batch_gen, train_batches_id):
+        for batch, (s_batch, _) in zip(train_batch_gen, train_batches_id):
             idx_out, idx_true, out, att_probs = epoch(batch, net, args.inspect)
             if current_epoch == args.epochs - 1 and args.inspect:
-                inspect(out, idx_true, save_model_path, current_epoch, n, att_probs, inv_word_idx, data, args, log)
+                inspect(out, idx_true, os.path.dirname(save_model_path), current_epoch, s_batch, att_probs, inv_word_idx, data, args, log)
             loss = criterion(out, idx_true)
             loss.backward()
-
             clip_grad_norm_(net.parameters(), 40)
             running_loss += loss
             current_correct, current_len = update_counts(current_correct, current_len, idx_out, idx_true)
@@ -97,9 +94,9 @@ def epoch(batch, net, inspect=False):
     QM = torch.stack(querymask_batch, dim=0) if querymask_batch is not None else None
 
     if inspect:
-        out, att_probs = net(S, Q, VM, PM, SM, QM)
+        out, att_probs = net(S, Q, VM, PM, SM, QM, inspect)
     else:
-        out = net(S, Q, VM, PM, SM, QM)
+        out = net(S, Q, VM, PM, SM, QM, inspect)
 
     _, idx_out = torch.max(out, 1)
     return idx_out, idx_true, out, att_probs if inspect else None
@@ -132,6 +129,7 @@ def eval_network(vocab_size, story_size, sentence_size, model, word_idx, test_ba
     log.info("Evaluating")
     net = N2N(args.batch_size, args.embed_size, vocab_size, args.hops, story_size=story_size, args=args, word_idx=word_idx)
     net.load_state_dict(torch.load(model))
+    inv_word_idx = {v: k for k, v in word_idx.items()}
     if torch.cuda.is_available() and cuda == 1:
         net = net.cuda()
     if args.dataset == "clicr":
@@ -144,10 +142,11 @@ def eval_network(vocab_size, story_size, sentence_size, model, word_idx, test_ba
     current_len = 0
     current_correct = 0
     preds = {} if args.dataset == "clicr" else None
-    inv_word_idx = {v: k for k, v in word_idx.items()}
 
     for batch, (s_batch, _) in zip(test_batch_gen, test_batches_id):
-        idx_out, idx_true, out = epoch(batch, net)
+        idx_out, idx_true, out, att_probs = epoch(batch, net, args.inspect)
+        if args.inspect:
+            inspect(out, idx_true, logdir, "eval", s_batch, att_probs, inv_word_idx, test, args, log)
         if preds is not None:
             for c, i in enumerate(idx_out):
                 # {query_id: answer}
@@ -156,17 +155,18 @@ def eval_network(vocab_size, story_size, sentence_size, model, word_idx, test_ba
         current_correct, current_len = update_counts(current_correct, current_len, idx_out, idx_true)
 
     # produce dummy predictions for query ids that were not classified by the model
-    missing = test_q_ids - preds.keys()
-    log.info("{} predictions missing out of {}.".format(len(missing), len(test_q_ids)))
-    for q_id in missing:
-        preds[q_id] = ""
+    if args.dataset=="clicr":
+        missing = test_q_ids - preds.keys()
+        log.info("\n{} predictions missing out of {}.".format(len(missing), len(test_q_ids)))
+        for q_id in missing:
+            preds[q_id] = ""
 
-    if preds is not None and args.dataset == "clicr":
-        test_file = args.data_dir + "test1.0.json"
-        preds_file = logdir + "/preds.json"
-        save_json(preds, preds_file)
-        results = evaluate_clicr(test_file, preds_file, extended=True, downcase=True)
-        log.info(results.decode())
+        if preds is not None:
+            test_file = args.data_dir + "test1.0.json"
+            preds_file = logdir + "/preds.json"
+            save_json(preds, preds_file)
+            results = evaluate_clicr(test_file, preds_file, extended=True, downcase=True)
+            log.info(results.decode())
 
     accuracy = 100 * (current_correct / current_len)
     log.info("Accuracy : {}".format(accuracy))
@@ -183,19 +183,19 @@ def model_path(dir, args):
     return saved_model_path
 
 
-def inspect(out, idx_true, save_model_path, current_epoch, n, att_probs, inv_word_idx, data, args, log):
+def inspect(out, idx_true, fig_dir, current_epoch, n, att_probs, inv_word_idx, data, args, log):
     # take only the 1st instance from batch:
     # attention prob distribution
     assert not args.shuffle
-    inst_id = data[n[0]][5]
+    inst_id = data[n][5]
     att = att_probs[0].detach().cpu().numpy()
-    log.info("\n{}\nQuery:\n{}".format(inst_id, " ".join(data[n[0]][1])))
-    log.info("\nPassage sentence with max. attention:\n{}\n".format(" ".join(data[n[0]][0][np.argmax(att)])))
-    plt.figure()
+    log.info("\n{}\nQuery:\n{}".format(inst_id, " ".join(data[n][1])))
+    log.info("\nPassage sentence with max. attention:\n{}\n".format(" ".join(data[n][0][np.argmax(att)])))
     plt.plot(att)
-    plt.axvline(x=len(data[n[0]][0]), color="red")
-    plt.savefig("{}/{}_ep{}.png".format(os.path.dirname(save_model_path), inst_id, current_epoch),
-                bbox_inches='tight')
+    plt.axvline(x=len(data[n][0]), color="red")
+    fig_path = "{}/{}_ep{}.png".format(fig_dir, inst_id, current_epoch)
+    plt.savefig(fig_path, bbox_inches='tight')
+    plt.close("all")
     # top k probs and answer ids
     out_probs, out_i = torch.topk(torch.exp(out[0]), 10)
     out_ans = [inv_word_idx[i.item()] for i in out_i]
@@ -228,7 +228,7 @@ def main():
     arg_parser.add_argument("--hops", type=int, default=1, help="Number of hops to make: 1, 2 or 3; default: 1 ")
     arg_parser.add_argument("--inspect", action="store_true", help="Flag to inspect attention and output distribution.")
     arg_parser.add_argument("--joint-training", type=int, default=0, help="joint training flag, default: 0")
-    arg_parser.add_argument("--load-model-path", type=str)
+    arg_parser.add_argument("--load-model-path", type=str, help="File path for the model.")
     arg_parser.add_argument("--log-epochs", type=int, default=4,
                             help="Number of epochs after which to log progress, default: 4")
     arg_parser.add_argument("--lr", type=float, default=0.01, help="learning rate, default: 0.01")
