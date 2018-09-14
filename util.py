@@ -146,6 +146,43 @@ def get_q_ids_clicr(fn):
     return q_ids
 
 
+def document_instance(context, title, qas):
+    return {"context": context, "title": title, "qas": qas}
+
+
+def dataset_instance(version, data):
+    return {"version": version, "data": data}
+
+
+def datum_instance(document, source):
+        return {"document": document, "source": source}
+
+
+def intersect_on_ids(dataset, predictions):
+    """
+    Reduce data to exclude all qa ids but those in  predictions.
+    """
+    new_data = []
+
+    for datum in dataset[DATA_KEY]:
+        qas = []
+        for qa in datum[DOC_KEY][QAS_KEY]:
+            if qa[ID_KEY] in predictions:
+                qas.append(qa)
+        if qas:
+            new_doc = document_instance(datum[DOC_KEY][CONTEXT_KEY], datum[DOC_KEY][TITLE_KEY], qas)
+            new_data.append(datum_instance(new_doc, datum[SOURCE_KEY]))
+
+    return dataset_instance(dataset[VERSION_KEY], new_data)
+
+
+def remove_missing_preds(fn, predictions):
+    dataset = load_json(fn)
+    new_dataset = intersect_on_ids(dataset, predictions)
+
+    return new_dataset
+
+
 def load_clicr(fn, ent_setup="ent", remove_notfound=True, max_n_load=None):
     questions = []
     raw = load_json(fn)
@@ -572,6 +609,7 @@ def vectorize_data_clicr(data, word_idx, sentence_size, memory_size):
     PM = []  # passage mask
     SM = []  # sentences mask
     QM = []  # query mask
+    inv_w_idx = {v: k for k, v in word_idx.items()}
 
     for story, query, answer, _, _, _ in data:
         lq = max(0, sentence_size - len(query))
@@ -615,8 +653,10 @@ def vectorize_data_clicr(data, word_idx, sentence_size, memory_size):
             y[word_idx[a]] = 1
 
         vm = np.zeros_like(y)
-        ss_flat = np.array(ss).flatten()
-        vm[ss_flat[np.where(ss_flat > 0.)[0]]] = 1.
+        # mask for all words in vocab not part of the entities in the passage:
+        # TODO this doesn't work for the no-ent setting
+        ss_voc = {i for i in set(np.array(ss).flatten()) if i!=0 and inv_w_idx[i].startswith("@entity")}
+        vm[list(ss_voc)] = 1.
 
         S.append(ss)
         Q.append(q)

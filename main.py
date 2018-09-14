@@ -10,14 +10,16 @@ import numpy as np
 
 from logger import get_logger
 from net import N2N
-from util import long_tensor_type, vectorize_data_clicr, vectorized_batches, vectorize_data, evaluate_clicr, save_json, get_q_ids_clicr
+from util import long_tensor_type, vectorize_data_clicr, vectorized_batches, vectorize_data, evaluate_clicr, save_json, \
+    get_q_ids_clicr, remove_missing_preds
 from util import process_data, process_data_clicr
 
 
 def train_network(train_batches_id, val_batches_id, test_batches_id, data, val_data, test_data, word_idx, sentence_size,
-                  vocab_size, story_size, save_model_path, args, log):
+                  vocab_size, story_size, save_model_path, args, log, max_inspect=50):
     if args.inspect:
         inv_word_idx = {v: k for k, v in word_idx.items()}
+        n_inspect = 0
     net = N2N(args.batch_size, args.embed_size, vocab_size, args.hops, story_size=story_size, args=args, word_idx=word_idx)
     if torch.cuda.is_available() and args.cuda == 1:
         net = net.cuda()
@@ -45,8 +47,9 @@ def train_network(train_batches_id, val_batches_id, test_batches_id, data, val_d
         current_correct = 0
         for batch, (s_batch, _) in zip(train_batch_gen, train_batches_id):
             idx_out, idx_true, out, att_probs = epoch(batch, net, args.inspect)
-            if current_epoch == args.epochs - 1 and args.inspect:
+            if current_epoch == args.epochs - 1 and args.inspect and n_inspect < max_inspect:
                 inspect(out, idx_true, os.path.dirname(save_model_path), current_epoch, s_batch, att_probs, inv_word_idx, data, args, log)
+                n_inspect += 1
             loss = criterion(out, idx_true)
             loss.backward()
             clip_grad_norm_(net.parameters(), 40)
@@ -54,15 +57,13 @@ def train_network(train_batches_id, val_batches_id, test_batches_id, data, val_d
             current_correct, current_len = update_counts(current_correct, current_len, idx_out, idx_true)
             optimizer.step()
             optimizer.zero_grad()
-            # print("Batch {}/{}.".format(n, len(train_batches_id)))
-
         if current_epoch % args.log_epochs == 0:
             accuracy = 100 * (current_correct / current_len)
-            val_acc = calculate_loss_and_accuracy(net, val_batches_id, val_data, word_idx, sentence_size, story_size,
+            val_acc, val_cor, val_tot = calculate_loss_and_accuracy(net, val_batches_id, val_data, word_idx, sentence_size, story_size,
                                                   vectorizer, args.inspect)
-            log.info("Epochs: {}, Train Accuracy: {}, Loss: {}, Val_Acc:{}".format(current_epoch, accuracy,
+            log.info("Epochs: {}, Train Accuracy: {:.3f}, Loss: {:.3f}, Val_Acc:{:.3f} ({}/{})".format(current_epoch, accuracy,
                                                                                 running_loss.item(),
-                                                                                val_acc))
+                                                                                val_acc, val_cor, val_tot))
             if best_val_acc_yet <= val_acc and args.save_model:
                 torch.save(net.state_dict(), save_model_path)
                 best_val_acc_yet = val_acc
@@ -122,14 +123,17 @@ def calculate_loss_and_accuracy(net, batches_id, data, word_idx, sentence_size, 
     for batch in batch_gen:
         idx_out, idx_true, out, _ = epoch(batch, net, inspect)
         current_correct, current_len = update_counts(current_correct, current_len, idx_out, idx_true)
-    return 100 * (current_correct / current_len)
+    return 100 * (current_correct / current_len), current_correct, current_len
 
 
-def eval_network(vocab_size, story_size, sentence_size, model, word_idx, test_batches_id, test, log, logdir, args, cuda=0., test_q_ids=None):
+def eval_network(vocab_size, story_size, sentence_size, model, word_idx, test_batches_id, test, log, logdir, args, cuda=0., test_q_ids=None, max_inspect=50, ignore_missing_preds=False):
     log.info("Evaluating")
     net = N2N(args.batch_size, args.embed_size, vocab_size, args.hops, story_size=story_size, args=args, word_idx=word_idx)
     net.load_state_dict(torch.load(model))
     inv_word_idx = {v: k for k, v in word_idx.items()}
+    if args.inspect:
+        n_inspect = 0
+
     if torch.cuda.is_available() and cuda == 1:
         net = net.cuda()
     if args.dataset == "clicr":
@@ -145,28 +149,32 @@ def eval_network(vocab_size, story_size, sentence_size, model, word_idx, test_ba
 
     for batch, (s_batch, _) in zip(test_batch_gen, test_batches_id):
         idx_out, idx_true, out, att_probs = epoch(batch, net, args.inspect)
-        if args.inspect:
+        if args.inspect and n_inspect < max_inspect:
             inspect(out, idx_true, logdir, "eval", s_batch, att_probs, inv_word_idx, test, args, log)
+            n_inspect += 1
         if preds is not None:
             for c, i in enumerate(idx_out):
                 # {query_id: answer}
                 preds[test[s_batch+c][5]] = inv_word_idx[i.item()]
-
         current_correct, current_len = update_counts(current_correct, current_len, idx_out, idx_true)
 
     # produce dummy predictions for query ids that were not classified by the model
     if args.dataset=="clicr":
         missing = test_q_ids - preds.keys()
         log.info("\n{} predictions missing out of {}.".format(len(missing), len(test_q_ids)))
-        for q_id in missing:
-            preds[q_id] = ""
-
-        if preds is not None:
+        if ignore_missing_preds:
+            log.info("Ignoring missing predictions.")
+            new_test = remove_missing_preds(args.data_dir + "test1.0.json", preds.keys())
+            test_file = logdir + "/reduced_test.json"
+            save_json(new_test, test_file)
+        else:
+            for q_id in missing:
+                preds[q_id] = ""
             test_file = args.data_dir + "test1.0.json"
-            preds_file = logdir + "/preds.json"
-            save_json(preds, preds_file)
-            results = evaluate_clicr(test_file, preds_file, extended=True, downcase=True)
-            log.info(results.decode())
+        preds_file = logdir + "/preds.json"
+        save_json(preds, preds_file)
+        results = evaluate_clicr(test_file, preds_file, extended=True, downcase=True)
+        log.info(results.decode())
 
     accuracy = 100 * (current_correct / current_len)
     log.info("Accuracy : {}".format(accuracy))
@@ -226,6 +234,8 @@ def main():
     arg_parser.add_argument("--freeze-pretrained-word-embed", action="store_true",
                             help="will prevent the pretrained word embeddings from being updated")
     arg_parser.add_argument("--hops", type=int, default=1, help="Number of hops to make: 1, 2 or 3; default: 1 ")
+    arg_parser.add_argument("--ignore-missing-preds", action="store_true",
+                            help="Whether to remove the missing predictions from the test during evaluation.")
     arg_parser.add_argument("--inspect", action="store_true", help="Flag to inspect attention and output distribution.")
     arg_parser.add_argument("--joint-training", type=int, default=0, help="joint training flag, default: 0")
     arg_parser.add_argument("--load-model-path", type=str, help="File path for the model.")
@@ -296,7 +306,7 @@ def main():
                 model = save_model_path
             else:
                 model = args.load_model_path
-            eval_network(vocab_size, story_size, sentence_size, model, word_idx, test_batches_id, test_data, log, logdir, args, cuda=args.cuda, test_q_ids=test_q_ids)
+            eval_network(vocab_size, story_size, sentence_size, model, word_idx, test_batches_id, test_data, log, logdir, args, cuda=args.cuda, test_q_ids=test_q_ids, ignore_missing_preds=args.ignore_missing_preds)
     elif args.dataset == "babi":
         data, test_data, sentence_size, vocab_size, story_size, word_idx = process_data(args)
         # get batch indices
