@@ -8,7 +8,7 @@ from util import get_position_encoding, long_tensor_type, load_emb
 
 
 class N2N(torch.nn.Module):
-    def __init__(self, batch_size, embed_size, vocab_size, hops, story_size, args, word_idx):
+    def __init__(self, batch_size, embed_size, vocab_size, hops, story_size, args, word_idx, output_size):
         super(N2N, self).__init__()
 
         self.embed_size = embed_size
@@ -88,8 +88,8 @@ class N2N(torch.nn.Module):
         #self.nonlin = nn.Tanh()
         #self.lin = nn.Linear(embed_size, embed_size)
         #self.lin_bn = nn.BatchNorm1d(embed_size)
-        self.lin_final = nn.Linear(embed_size, vocab_size)
-        self.lin_final_bn = nn.BatchNorm1d(vocab_size)
+        self.lin_final = nn.Linear(embed_size, output_size)
+        self.lin_final_bn = nn.BatchNorm1d(output_size)
 
     def forward(self, trainS, trainQ, trainVM, trainPM, trainSM, trainQM, inspect):
         """
@@ -110,7 +110,7 @@ class N2N(torch.nn.Module):
         # w_u = queries_sum
         # for i in range(self.hops):
         #     w_u = self.one_hop(S, w_u, self.A[i], self.A[i + 1], self.TA[i], self.TA[i + 1])
-
+        #queries_avg = queries_sum / torch.sum(trainQM, dim=1).unsqueeze(1).expand_as(queries_sum)
         if inspect:
             w_u, att_probs = self.hop(S, queries_sum, self.A1, self.A2, trainPM, trainSM, inspect)  # , self.TA, self.TA2)
         else:
@@ -198,7 +198,7 @@ class N2N(torch.nn.Module):
 
         batch_story_embedding_temp = torch.stack(story_embedding_list)
         # zero out the masked (padded) word embeddings in the passage:
-        batch_story_embedding_temp * sent_mask.unsqueeze(3).expand_as(batch_story_embedding_temp)
+        batch_story_embedding_temp = batch_story_embedding_temp * sent_mask.unsqueeze(3).expand_as(batch_story_embedding_temp)
         batch_story_embedding = torch.sum(batch_story_embedding_temp, dim=2)
 
         return torch.squeeze(batch_story_embedding, dim=2)

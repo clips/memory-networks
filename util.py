@@ -70,13 +70,14 @@ def process_data_clicr(args, log):
         ()
     ]
     '''
-    memory_size, sentence_size, vocab_size, word_idx = calculate_parameter_values_clicr(data=data, debug=args.debug,
+    memory_size, sentence_size, vocab_size, word_idx, output_size, output_idx = calculate_parameter_values_clicr(data=data, debug=args.debug,
                                                                                         memory_size=args.memory_size,
                                                                                         vocab=vocab, log=log)
     if args.debug:
         log.info("Vocabulary Size: {}".format(vocab_size))
+        log.info("Output Size: {}".format(output_size))
 
-    return data, val_data, test_data, sentence_size, vocab_size, memory_size, word_idx
+    return data, val_data, test_data, sentence_size, vocab_size, memory_size, word_idx, output_size, output_idx
 
 
 def process_data(args, log):
@@ -470,19 +471,26 @@ def calculate_parameter_values(data, debug, memory_size, vocab, log):
 
 def calculate_parameter_values_clicr(data, debug, memory_size, vocab, log):
     word_idx = dict((c, i + 1) for i, c in enumerate(vocab))
+    output_idx = dict()
+    i = 0
+    for w in vocab:
+        if w.startswith("@entity"):
+            output_idx[w] = i
+            i += 1
     max_story_size = max(map(len, (s for s, _, _, _, _, _ in data)))
     mean_story_size = int(np.mean(list(map(len, (s for s, _, _, _, _, _ in data)))))
     sentence_size = max(map(len, chain.from_iterable(s for s, _, _, _, _, _ in data)))
     query_size = max(map(len, (q for _, q, _, _, _, _ in data)))
     memory_size = min(memory_size, max_story_size)
     vocab_size = len(word_idx) + 1  # +1 for nil word
+    output_size = len(output_idx)
     sentence_size = max(query_size, sentence_size)  # for the position
     if debug is True:
         log.info("Longest sentence length: {}".format(sentence_size))
         log.info("Longest story length: {}".format(max_story_size))
         log.info("Average story length: {}".format(mean_story_size))
         log.info("Average memory size: {}".format(memory_size))
-    return memory_size, sentence_size, vocab_size, word_idx
+    return memory_size, sentence_size, vocab_size, word_idx, output_size, output_idx
 
 
 def vectorize_task_data(batch_size, data, debug, memory_size, random_state, sentence_size, test,
@@ -585,7 +593,7 @@ def vectorize_data(data, word_idx, sentence_size, memory_size):
     return np.array(S), np.array(Q), np.array(A), VM, PL, SL, QL
 
 
-def vectorize_data_clicr(data, word_idx, sentence_size, memory_size):
+def vectorize_data_clicr(data, word_idx, output_size, output_idx, sentence_size, memory_size):
     '''
     Vectorize stories and queries.
 
@@ -648,14 +656,14 @@ def vectorize_data_clicr(data, word_idx, sentence_size, memory_size):
             for _ in range(lm):
                 ss.append([0] * sentence_size)
                 #ss_len.append([0.] * sentence_size)
-        y = np.zeros(len(word_idx) + 1)  # 0 is reserved for nil word
+        y = np.zeros(output_size)
         for a in answer:
-            y[word_idx[a]] = 1
+            y[output_idx[a]] = 1
 
         vm = np.zeros_like(y)
         # mask for all words in vocab not part of the entities in the passage:
         # TODO this doesn't work for the no-ent setting
-        ss_voc = {i for i in set(np.array(ss).flatten()) if i!=0 and inv_w_idx[i].startswith("@entity")}
+        ss_voc = {output_idx[inv_w_idx[i]] for i in set(np.array(ss).flatten()) if i!=0 and inv_w_idx[i] in output_idx}
         vm[list(ss_voc)] = 1.
 
         S.append(ss)
@@ -685,12 +693,12 @@ def get_batch_from_batch_list(batches_tr, train):
     return train_batches
 
 
-def vectorized_batches(batches, data, word_idx, sentence_size, memory_size, vectorizer=vectorize_data, shuffle=False):
+def vectorized_batches(batches, data, word_idx, sentence_size, memory_size, output_size, output_idx, vectorizer=vectorize_data, shuffle=False):
     # batches are of form : [(0,2), (2,4),...]
     if shuffle:
         np.random.shuffle(batches)
     for s_batch, e_batch in batches:
-        dataS, dataQ, dataA, dataVM, dataPM, dataSM, dataQM = vectorizer(data[s_batch:e_batch], word_idx, sentence_size, memory_size)
+        dataS, dataQ, dataA, dataVM, dataPM, dataSM, dataQM = vectorizer(data[s_batch:e_batch], word_idx, output_size, output_idx, sentence_size, memory_size)
         dataA, dataQ, dataS, dataVM, dataPM, dataSM, dataQM = extract_tensors(dataA, dataQ, dataS, dataVM, dataPM, dataSM, dataQM)
 
         yield [list(dataS),
@@ -805,3 +813,14 @@ def evaluate_clicr(test_file, preds_file, extended=False,
             test_file=test_file, preds_file=preds_file, emb_file=emb_file, downcase="-downcase" if downcase else "",
             extended="-extended" if extended else ""), shell=True)
     return results
+
+
+def deentitize(s):
+    """
+    :param s: e.g. "@entityparalysis_of_the_lower_limbs"
+    :return: "paralysis of the lower limbs"
+    """
+    e_m = "@entity"
+    assert s.startswith("@entity")
+
+    return s[len(e_m):].replace("_", " ")

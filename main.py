@@ -5,22 +5,25 @@ import os
 import torch
 from torch.autograd import Variable
 from torch.nn.utils import clip_grad_norm_
+import matplotlib as mpl
+mpl.use('Agg')
 import matplotlib.pyplot as plt
 import numpy as np
 
 from logger import get_logger
 from net import N2N
 from util import long_tensor_type, vectorize_data_clicr, vectorized_batches, vectorize_data, evaluate_clicr, save_json, \
-    get_q_ids_clicr, remove_missing_preds
+    get_q_ids_clicr, remove_missing_preds, deentitize
 from util import process_data, process_data_clicr
 
 
+
 def train_network(train_batches_id, val_batches_id, test_batches_id, data, val_data, test_data, word_idx, sentence_size,
-                  vocab_size, story_size, save_model_path, args, log, max_inspect=50):
+                  vocab_size, story_size, output_size, output_idx, save_model_path, args, log, max_inspect=50):
     if args.inspect:
-        inv_word_idx = {v: k for k, v in word_idx.items()}
+        inv_output_idx = {v: k for k, v in output_idx.items()}
         n_inspect = 0
-    net = N2N(args.batch_size, args.embed_size, vocab_size, args.hops, story_size=story_size, args=args, word_idx=word_idx)
+    net = N2N(args.batch_size, args.embed_size, vocab_size, args.hops, story_size=story_size, args=args, word_idx=word_idx, output_size=output_size)
     if torch.cuda.is_available() and args.cuda == 1:
         net = net.cuda()
     #criterion = torch.nn.CrossEntropyLoss()
@@ -42,13 +45,13 @@ def train_network(train_batches_id, val_batches_id, test_batches_id, data, val_d
     running_loss = 0.0
     best_val_acc_yet = 0.0
     for current_epoch in range(args.epochs):
-        train_batch_gen = vectorized_batches(train_batches_id, data, word_idx, sentence_size, story_size, vectorizer, shuffle=args.shuffle)
+        train_batch_gen = vectorized_batches(train_batches_id, data, word_idx, sentence_size, story_size, output_size, output_idx, vectorizer, shuffle=args.shuffle)
         current_len = 0
         current_correct = 0
         for batch, (s_batch, _) in zip(train_batch_gen, train_batches_id):
             idx_out, idx_true, out, att_probs = epoch(batch, net, args.inspect)
             if current_epoch == args.epochs - 1 and args.inspect and n_inspect < max_inspect:
-                inspect(out, idx_true, os.path.dirname(save_model_path), current_epoch, s_batch, att_probs, inv_word_idx, data, args, log)
+                inspect(out, idx_true, os.path.dirname(save_model_path), current_epoch, s_batch, att_probs, inv_output_idx, data, args, log)
                 n_inspect += 1
             loss = criterion(out, idx_true)
             loss.backward()
@@ -60,7 +63,7 @@ def train_network(train_batches_id, val_batches_id, test_batches_id, data, val_d
         if current_epoch % args.log_epochs == 0:
             accuracy = 100 * (current_correct / current_len)
             val_acc, val_cor, val_tot = calculate_loss_and_accuracy(net, val_batches_id, val_data, word_idx, sentence_size, story_size,
-                                                  vectorizer, args.inspect)
+                                                                    output_size, output_idx, vectorizer, args.inspect)
             log.info("Epochs: {}, Train Accuracy: {:.3f}, Loss: {:.3f}, Val_Acc:{:.3f} ({}/{})".format(current_epoch, accuracy,
                                                                                 running_loss.item(),
                                                                                 val_acc, val_cor, val_tot))
@@ -116,8 +119,8 @@ def count_predictions(labels, predicted):
     return batch_len, correct
 
 
-def calculate_loss_and_accuracy(net, batches_id, data, word_idx, sentence_size, story_size, vectorizer, inspect=False):
-    batch_gen = vectorized_batches(batches_id, data, word_idx, sentence_size, story_size, vectorizer)
+def calculate_loss_and_accuracy(net, batches_id, data, word_idx, sentence_size, story_size, output_size, output_idx, vectorizer, inspect=False):
+    batch_gen = vectorized_batches(batches_id, data, word_idx, sentence_size, story_size, output_size, output_idx, vectorizer)
     current_len = 0
     current_correct = 0
     for batch in batch_gen:
@@ -126,11 +129,11 @@ def calculate_loss_and_accuracy(net, batches_id, data, word_idx, sentence_size, 
     return 100 * (current_correct / current_len), current_correct, current_len
 
 
-def eval_network(vocab_size, story_size, sentence_size, model, word_idx, test_batches_id, test, log, logdir, args, cuda=0., test_q_ids=None, max_inspect=50, ignore_missing_preds=False):
+def eval_network(vocab_size, story_size, sentence_size, model, word_idx, output_size, output_idx, test_batches_id, test, log, logdir, args, cuda=0., test_q_ids=None, max_inspect=50, ignore_missing_preds=False):
     log.info("Evaluating")
-    net = N2N(args.batch_size, args.embed_size, vocab_size, args.hops, story_size=story_size, args=args, word_idx=word_idx)
+    net = N2N(args.batch_size, args.embed_size, vocab_size, args.hops, story_size=story_size, args=args, word_idx=word_idx, output_size=output_size)
     net.load_state_dict(torch.load(model))
-    inv_word_idx = {v: k for k, v in word_idx.items()}
+    inv_output_idx = {v: k for k, v in output_idx.items()}
     if args.inspect:
         n_inspect = 0
 
@@ -142,7 +145,7 @@ def eval_network(vocab_size, story_size, sentence_size, model, word_idx, test_ba
         vectorizer = vectorize_data
     else:
         raise NotImplementedError
-    test_batch_gen = vectorized_batches(test_batches_id, test, word_idx, sentence_size, story_size, vectorizer)
+    test_batch_gen = vectorized_batches(test_batches_id, test, word_idx, sentence_size, story_size, output_size, output_idx, vectorizer)
     current_len = 0
     current_correct = 0
     preds = {} if args.dataset == "clicr" else None
@@ -150,15 +153,15 @@ def eval_network(vocab_size, story_size, sentence_size, model, word_idx, test_ba
     for batch, (s_batch, _) in zip(test_batch_gen, test_batches_id):
         idx_out, idx_true, out, att_probs = epoch(batch, net, args.inspect)
         if args.inspect and n_inspect < max_inspect:
-            inspect(out, idx_true, logdir, "eval", s_batch, att_probs, inv_word_idx, test, args, log)
+            inspect(out, idx_true, logdir, "eval", s_batch, att_probs, inv_output_idx, test, args, log)
             n_inspect += 1
         if preds is not None:
             for c, i in enumerate(idx_out):
                 # {query_id: answer}
-                preds[test[s_batch+c][5]] = inv_word_idx[i.item()]
+                preds[test[s_batch+c][5]] = deentitize(inv_output_idx[i.item()])
         current_correct, current_len = update_counts(current_correct, current_len, idx_out, idx_true)
 
-    # produce dummy predictions for query ids that were not classified by the model
+    # clicr detailed evaluation
     if args.dataset=="clicr":
         missing = test_q_ids - preds.keys()
         log.info("\n{} predictions missing out of {}.".format(len(missing), len(test_q_ids)))
@@ -191,7 +194,7 @@ def model_path(dir, args):
     return saved_model_path
 
 
-def inspect(out, idx_true, fig_dir, current_epoch, n, att_probs, inv_word_idx, data, args, log):
+def inspect(out, idx_true, fig_dir, current_epoch, n, att_probs, inv_output_idx, data, args, log):
     # take only the 1st instance from batch:
     # attention prob distribution
     assert not args.shuffle
@@ -206,8 +209,8 @@ def inspect(out, idx_true, fig_dir, current_epoch, n, att_probs, inv_word_idx, d
     plt.close("all")
     # top k probs and answer ids
     out_probs, out_i = torch.topk(torch.exp(out[0]), 10)
-    out_ans = [inv_word_idx[i.item()] for i in out_i]
-    log.info("Gold answer: {}".format(inv_word_idx[idx_true[0].item()]))
+    out_ans = [inv_output_idx[i.item()] for i in out_i]
+    log.info("Gold answer: {}".format(inv_output_idx[idx_true[0].item()]))
     log.info("Predicted (k-best):")
     log.info("___________________")
     for a, p in zip(out_ans, list(out_probs.detach().cpu().numpy())):
@@ -280,7 +283,7 @@ def main():
 
     if args.dataset == "clicr":
         # load data
-        data, val_data, test_data, sentence_size, vocab_size, story_size, word_idx = process_data_clicr(args, log=log)
+        data, val_data, test_data, sentence_size, vocab_size, story_size, word_idx, output_size, output_idx = process_data_clicr(args, log=log)
         if args.pretrained_word_embed:
             log.info("Using pretrained word embeddings: {}".format(args.pretrained_word_embed))
         else:
@@ -300,13 +303,13 @@ def main():
         if args.train == 1:
             train_network(train_batches_id, val_batches_id, test_batches_id, data, val_data, test_data, word_idx,
                           sentence_size, story_size=story_size,
-                          vocab_size=vocab_size, save_model_path=save_model_path, args=args, log=log)
+                          vocab_size=vocab_size, output_size=output_size, output_idx=output_idx, save_model_path=save_model_path, args=args, log=log)
         if args.eval == 1:
             if args.train == 1:
                 model = save_model_path
             else:
                 model = args.load_model_path
-            eval_network(vocab_size, story_size, sentence_size, model, word_idx, test_batches_id, test_data, log, logdir, args, cuda=args.cuda, test_q_ids=test_q_ids, ignore_missing_preds=args.ignore_missing_preds)
+            eval_network(vocab_size, story_size, sentence_size, model, word_idx, output_size, output_idx, test_batches_id, test_data, log, logdir, args, cuda=args.cuda, test_q_ids=test_q_ids, ignore_missing_preds=args.ignore_missing_preds)
     elif args.dataset == "babi":
         data, test_data, sentence_size, vocab_size, story_size, word_idx = process_data(args)
         # get batch indices
