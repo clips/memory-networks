@@ -18,6 +18,7 @@ class N2N(torch.nn.Module):
         self.pretrained_word_embed = args.pretrained_word_embed
         self.freeze_pretrained_word_embed = args.freeze_pretrained_word_embed
         self.word_idx = word_idx
+        self.args = args
 
         if self.hops <= 0:
             raise ValueError("Number of hops have to be greater than 0")
@@ -110,7 +111,7 @@ class N2N(torch.nn.Module):
         # w_u = queries_sum
         # for i in range(self.hops):
         #     w_u = self.one_hop(S, w_u, self.A[i], self.A[i + 1], self.TA[i], self.TA[i + 1])
-        if args.average_embs:
+        if self.args.average_embs:
             normalizer = torch.sum(trainQM, dim=1).unsqueeze(1).expand_as(queries_rep)
             normalizer[normalizer==0.] = float("Inf")
             queries_rep = queries_rep / normalizer
@@ -203,7 +204,7 @@ class N2N(torch.nn.Module):
         # zero out the masked (padded) word embeddings in the passage:
         batch_story_embedding_temp = batch_story_embedding_temp * sent_mask.unsqueeze(3).expand_as(batch_story_embedding_temp)
         batch_story_embedding = torch.sum(batch_story_embedding_temp, dim=2)
-        if args.average_embs:
+        if self.args.average_embs:
             normalizer = torch.sum(sent_mask, dim=2).unsqueeze(2).expand_as(batch_story_embedding)
             normalizer[normalizer==0.] = float("Inf")
             batch_story_embedding = batch_story_embedding / normalizer
