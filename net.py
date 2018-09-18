@@ -106,15 +106,18 @@ class N2N(torch.nn.Module):
         # zero out the masked (padded) word embeddings:
         queries = queries * trainQM.unsqueeze(2).expand_as(queries)
 
-        queries_sum = torch.sum(queries, dim=1)
+        queries_rep = torch.sum(queries, dim=1)
         # w_u = queries_sum
         # for i in range(self.hops):
         #     w_u = self.one_hop(S, w_u, self.A[i], self.A[i + 1], self.TA[i], self.TA[i + 1])
-        #queries_avg = queries_sum / torch.sum(trainQM, dim=1).unsqueeze(1).expand_as(queries_sum)
+        if args.average_embs:
+            normalizer = torch.sum(trainQM, dim=1).unsqueeze(1).expand_as(queries_rep)
+            normalizer[normalizer==0.] = float("Inf")
+            queries_rep = queries_rep / normalizer
         if inspect:
-            w_u, att_probs = self.hop(S, queries_sum, self.A1, self.A2, trainPM, trainSM, inspect)  # , self.TA, self.TA2)
+            w_u, att_probs = self.hop(S, queries_rep, self.A1, self.A2, trainPM, trainSM, inspect)  # , self.TA, self.TA2)
         else:
-            w_u = self.hop(S, queries_sum, self.A1, self.A2, trainPM, trainSM,
+            w_u = self.hop(S, queries_rep, self.A1, self.A2, trainPM, trainSM,
                                       inspect)  # , self.TA, self.TA2)
 
         if self.hops >= 2:
@@ -200,5 +203,9 @@ class N2N(torch.nn.Module):
         # zero out the masked (padded) word embeddings in the passage:
         batch_story_embedding_temp = batch_story_embedding_temp * sent_mask.unsqueeze(3).expand_as(batch_story_embedding_temp)
         batch_story_embedding = torch.sum(batch_story_embedding_temp, dim=2)
+        if args.average_embs:
+            normalizer = torch.sum(sent_mask, dim=2).unsqueeze(2).expand_as(batch_story_embedding)
+            normalizer[normalizer==0.] = float("Inf")
+            batch_story_embedding = batch_story_embedding / normalizer
 
         return torch.squeeze(batch_story_embedding, dim=2)

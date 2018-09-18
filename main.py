@@ -19,10 +19,9 @@ from util import process_data, process_data_clicr
 
 
 def train_network(train_batches_id, val_batches_id, test_batches_id, data, val_data, test_data, word_idx, sentence_size,
-                  vocab_size, story_size, output_size, output_idx, save_model_path, args, log, max_inspect=50):
+                  vocab_size, story_size, output_size, output_idx, save_model_path, args, log, max_inspect=5):
     if args.inspect:
         inv_output_idx = {v: k for k, v in output_idx.items()}
-        n_inspect = 0
     net = N2N(args.batch_size, args.embed_size, vocab_size, args.hops, story_size=story_size, args=args, word_idx=word_idx, output_size=output_size)
     if torch.cuda.is_available() and args.cuda == 1:
         net = net.cuda()
@@ -45,12 +44,15 @@ def train_network(train_batches_id, val_batches_id, test_batches_id, data, val_d
     running_loss = 0.0
     best_val_acc_yet = 0.0
     for current_epoch in range(args.epochs):
+        if args.inspect:
+            n_inspect = 0
         train_batch_gen = vectorized_batches(train_batches_id, data, word_idx, sentence_size, story_size, output_size, output_idx, vectorizer, shuffle=args.shuffle)
         current_len = 0
         current_correct = 0
         for batch, (s_batch, _) in zip(train_batch_gen, train_batches_id):
             idx_out, idx_true, out, att_probs = epoch(batch, net, args.inspect)
-            if current_epoch == args.epochs - 1 and args.inspect and n_inspect < max_inspect:
+            #if current_epoch == args.epochs - 1 and args.inspect and n_inspect < max_inspect:
+            if args.inspect and n_inspect < max_inspect:
                 inspect(out, idx_true, os.path.dirname(save_model_path), current_epoch, s_batch, att_probs, inv_output_idx, data, args, log)
                 n_inspect += 1
             loss = criterion(out, idx_true)
@@ -129,7 +131,7 @@ def calculate_loss_and_accuracy(net, batches_id, data, word_idx, sentence_size, 
     return 100 * (current_correct / current_len), current_correct, current_len
 
 
-def eval_network(vocab_size, story_size, sentence_size, model, word_idx, output_size, output_idx, test_batches_id, test, log, logdir, args, cuda=0., test_q_ids=None, max_inspect=50, ignore_missing_preds=False):
+def eval_network(vocab_size, story_size, sentence_size, model, word_idx, output_size, output_idx, test_batches_id, test, log, logdir, args, cuda=0., test_q_ids=None, max_inspect=5, ignore_missing_preds=False):
     log.info("Evaluating")
     net = N2N(args.batch_size, args.embed_size, vocab_size, args.hops, story_size=story_size, args=args, word_idx=word_idx, output_size=output_size)
     net.load_state_dict(torch.load(model))
@@ -203,6 +205,8 @@ def inspect(out, idx_true, fig_dir, current_epoch, n, att_probs, inv_output_idx,
     log.info("\n{}\nQuery:\n{}".format(inst_id, " ".join(data[n][1])))
     log.info("\nPassage sentence with max. attention:\n{}\n".format(" ".join(data[n][0][np.argmax(att)])))
     plt.plot(att)
+    lens = np.array([len(l) for l in data[n][0]])
+    plt.plot(lens/np.sum(lens), linestyle='dashed')
     plt.axvline(x=len(data[n][0]), color="red")
     fig_path = "{}/{}_ep{}.png".format(fig_dir, inst_id, current_epoch)
     plt.savefig(fig_path, bbox_inches='tight')
@@ -224,6 +228,7 @@ def main():
                             help="anneal every [anneal-epoch] epoch, default: 25")
     arg_parser.add_argument("--anneal-factor", type=int, default=2,
                             help="factor to anneal by every 'anneal-epoch(s)', default: 2")
+    arg_parser.add_argument("--average_embs", action="store_true", help="Flag to average context embs instead of summing.")
     arg_parser.add_argument("--batch-size", type=int, default=32, help="batch size for training, default: 32")
     arg_parser.add_argument("--cuda", type=int, default=0, help="train on GPU, default: 0")
     arg_parser.add_argument("--data-dir", type=str, default="./data/tasks_1-20_v1-2/en",
