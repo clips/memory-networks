@@ -111,6 +111,7 @@ def process_data(args, log):
 
 
 def load_data_clicr(data_dir, ent_setup, log, max_n_load=None):
+    #train_data, _ = load_clicr_ent_only(data_dir + "train1.0.json", ent_setup, max_n_load=max_n_load)
     train_data, _ = load_clicr(data_dir + "train1.0.json", ent_setup, max_n_load=max_n_load)
     val_data, _ = load_clicr(data_dir + "dev1.0.json", ent_setup, remove_notfound=False, max_n_load=max_n_load)
     test_data, _ = load_clicr(data_dir + "test1.0.json", ent_setup, remove_notfound=False, max_n_load=max_n_load)
@@ -286,6 +287,68 @@ def load_clicr(fn, ent_setup="ent", remove_notfound=True, max_n_load=None):
                             continue
 
                 relabeling_dicts[qa[ID_KEY]] = None
+                # wrap the query with special symbols
+                qry_raw.insert(0, SYMB_BEGIN)
+                qry_raw.append(SYMB_END)
+                try:
+                    cloze = qry_raw.index('@placeholder')
+                except ValueError:
+                    print('@placeholder not found in ', qry_raw, '. Fixing...')
+                    at = qry_raw.index('@')
+                    qry_raw = qry_raw[:at] + [''.join(qry_raw[at:at + 2])] + qry_raw[at + 2:]
+                    cloze = qry_raw.index('@placeholder')
+
+                questions.append(([sent.split() for sent in sents], qry_raw, [ans_raw], cand_raw, cloze, qry_id))
+            else:
+                raise ValueError
+        if max_n_load is not None and c > max_n_load:
+            break
+    return questions, relabeling_dicts
+
+
+def load_clicr_ent_only(fn, ent_setup="ent", remove_notfound=True, max_n_load=None):
+    """
+    only entities as text
+    """
+    questions = []
+    raw = load_json(fn)
+    relabeling_dicts = {}
+    for c, datum in enumerate(raw[DATA_KEY]):
+        sents = []
+        for sent in (datum[DOC_KEY][TITLE_KEY] + "\n" + datum[DOC_KEY][CONTEXT_KEY]).split("\n"):
+            if sent:
+                ent_sent = " ".join([w for w in to_entities(sent).lower().split(" ") if w.startswith("@entity")])
+                if ent_sent:
+                    sents.append(ent_sent)
+        document = " ".join(sents)
+        for qa in datum[DOC_KEY][QAS_KEY]:
+            if ent_setup in ["ent"]:
+                doc_raw = document.split()
+                question = " ".join([w for w in to_entities(qa[QUERY_KEY]).lower().split(" ") if w.startswith("@entity") or w.startswith("@placeholder")])
+                if not question:
+                    continue
+                qry_id = qa[ID_KEY]
+                assert question
+                ans_raw = ""
+                for ans in qa[ANS_KEY]:
+                    if ans[ORIG_KEY] == "dataset":
+                        ans_raw = ("@entity" + "_".join(ans[TXT_KEY].split())).lower()
+                assert ans_raw
+                if remove_notfound:  # should be always false for dev and test
+                    if ans_raw not in doc_raw:
+                        found_umls = False
+                        for ans in qa[ANS_KEY]:
+                            if ans[ORIG_KEY] == "UMLS":
+                                umls_answer = ("@entity" + "_".join(ans[TXT_KEY].split())).lower()
+                                if umls_answer in doc_raw:
+                                    found_umls = True
+                                    ans_raw = umls_answer
+                        if not found_umls:
+                            continue
+                qry_raw = question.split()
+
+                cand_e = [w for w in doc_raw if w.startswith('@entity')]
+                cand_raw = [[e] for e in cand_e]
                 # wrap the query with special symbols
                 qry_raw.insert(0, SYMB_BEGIN)
                 qry_raw.append(SYMB_END)
@@ -657,13 +720,16 @@ def vectorize_data_clicr(data, word_idx, output_size, output_idx, sentence_size,
                 ss.append([0] * sentence_size)
                 #ss_len.append([0.] * sentence_size)
         y = np.zeros(output_size)
+        #y = np.zeros(len(word_idx)+1)
         for a in answer:
             y[output_idx[a]] = 1
+            #y[word_idx[a]] = 1
 
         vm = np.zeros_like(y)
         # mask for all words in vocab not part of the entities in the passage:
         # TODO this doesn't work for the no-ent setting
         ss_voc = {output_idx[inv_w_idx[i]] for i in set(np.array(ss).flatten()) if i!=0 and inv_w_idx[i] in output_idx}
+        #ss_voc = {word_idx[inv_w_idx[i]] for i in set(np.array(ss).flatten()) if i != 0 and inv_w_idx[i] in word_idx}
         vm[list(ss_voc)] = 1.
 
         S.append(ss)
@@ -780,10 +846,11 @@ def weight_update(name, param):
     print(name, (torch.norm(update) / torch.norm(weight)).data[0])
 
 
-def load_w2v(fn, word_idx):
+def load_w2v(fn):
+    emb_idx = {}
     with open(fn) as fh:
-        _, n = map(eval, fh.readline().strip().split())
-        e_m = np.zeros((len(word_idx)+1, n))
+        m, n = map(eval, fh.readline().strip().split())
+        e_m = np.random.normal(size=(m, n), loc=0, scale=0.1)
         for c, l in enumerate(fh):
             w, *e = l.strip().split()
             if len(e) != n:
@@ -791,18 +858,37 @@ def load_w2v(fn, word_idx):
                 continue
             if not w or not e:
                 print("Empty w or e.")
-            if w not in word_idx:
+            emb_idx[w] = c
+            e_m[c] = e
+    return e_m, emb_idx, n
+
+
+def update_vectors(pretr_embs, pretr_emb_idx, embs, word_idx):
+    c = 0
+    for w, i in word_idx.items():
+        if w.startswith("@entity"):
+            w_l = deentitize(w).split(" ")
+            w_idx = [pretr_emb_idx[w] for w in w_l if w in pretr_emb_idx]
+            if not w_idx:
                 continue
-            pos = word_idx[w]
-            e_m[pos] = e
-    return e_m, n
+            embs[i] = np.average(pretr_embs[w_idx], axis=0)
+            c+=1
+        else:
+            if w not in pretr_emb_idx:
+                continue
+            embs[i] = pretr_embs[pretr_emb_idx[w]]
+    print("Updated {} entity vectors".format(c))
+    return embs
 
 
-def load_emb(fn, word_idx, freeze=False):
-    embs, dim = load_w2v(fn, word_idx)
+def load_emb(fn, word_idx, freeze=False, ent_setup="ent"):
+    pretr_embs, pretr_emb_idx, n = load_w2v(fn)
+    # build rep. for entities by averaging word vectors
+    embs = np.random.normal(size=(len(word_idx)+1, n), loc=0, scale=0.1)
+    embs = update_vectors(pretr_embs, pretr_emb_idx, embs, word_idx)
     embs_tensor = nn.Embedding.from_pretrained(float_tensor_type(embs), freeze=freeze)
 
-    return embs_tensor, dim
+    return embs_tensor, n
 
 
 def evaluate_clicr(test_file, preds_file, extended=False,

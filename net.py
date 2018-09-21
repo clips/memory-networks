@@ -48,6 +48,7 @@ class N2N(torch.nn.Module):
         """
         # for 1 hop:
         # for >1 hop:
+        """
         if args.pretrained_word_embed:
             self.A2, dim = load_emb(args.pretrained_word_embed, self.word_idx, freeze=args.freeze_pretrained_word_embed)
             assert dim == self.embed_size
@@ -55,6 +56,7 @@ class N2N(torch.nn.Module):
             self.A2 = nn.Embedding(vocab_size, embed_size)
             self.A2.weight = nn.Parameter(torch.randn(vocab_size, embed_size).normal_(0, 0.1))
         # self.TA2 = nn.Parameter(torch.randn(self.batch_size, self.story_size, self.embed_size).normal_(0, 0.1))
+        """
         """
         # query embedding
         if args.pretrained_word_embed:
@@ -84,13 +86,21 @@ class N2N(torch.nn.Module):
                 self.A4.weight = nn.Parameter(torch.randn(vocab_size, embed_size).normal_(0, 0.1))
             # self.TA4 = nn.Parameter(torch.randn(self.batch_size, self.story_size, self.embed_size).normal_(0, 0.1))
 
+
+        #self.G =nn.Linear(embed_size, embed_size)
+
         # final weight matrix
         # self.W = nn.Parameter(torch.randn(embed_size, vocab_size), requires_grad=True)
         #self.nonlin = nn.Tanh()
         #self.lin = nn.Linear(embed_size, embed_size)
+        #self.dropout = nn.Dropout(0.3)
         #self.lin_bn = nn.BatchNorm1d(embed_size)
-        self.lin_final = nn.Linear(embed_size, output_size)
-        self.lin_final_bn = nn.BatchNorm1d(output_size)
+        self.cos = nn.CosineSimilarity(dim=2)
+        self.lin_final = nn.Linear(embed_size*4, output_size)
+        #self.lin_final = nn.Linear(embed_size, vocab_size)
+        #self.lin_final.weight = nn.Parameter(self.A1.weight)
+        #self.lin_final_bn = nn.BatchNorm1d(output_size)
+        #self.lin_final_bn = nn.BatchNorm1d(vocab_size)
 
     def forward(self, trainS, trainQ, trainVM, trainPM, trainSM, trainQM, inspect):
         """
@@ -116,34 +126,40 @@ class N2N(torch.nn.Module):
             normalizer[normalizer==0.] = float("Inf")
             queries_rep = queries_rep / normalizer
         if inspect:
-            w_u, att_probs = self.hop(S, queries_rep, self.A1, self.A2, trainPM, trainSM, inspect)  # , self.TA, self.TA2)
+            #w_u, att_probs = self.hop(S, queries_rep, self.A1, self.A2, trainPM, trainSM, inspect)  # , self.TA, self.TA2)
+            w_u, att_probs = self.hop(S, queries_rep, self.A1, self.A1, trainPM, trainSM, inspect)  # , self.TA, self.TA2)
         else:
-            w_u = self.hop(S, queries_rep, self.A1, self.A2, trainPM, trainSM,
-                                      inspect)  # , self.TA, self.TA2)
+            #w_u = self.hop(S, queries_rep, self.A1, self.A2, trainPM, trainSM, inspect)  # , self.TA, self.TA2)
+            w_u = self.hop(S, queries_rep, self.A1, self.A1, trainPM, trainSM, inspect)  # , self.TA, self.TA2)
 
         if self.hops >= 2:
             if inspect:
-                w_u, att_probs = self.hop(S, w_u, self.A2, self.A3, trainPM, trainSM, inspect)  # , self.TA, self.TA3)
+                #w_u, att_probs = self.hop(S, w_u, self.A2, self.A3, trainPM, trainSM, inspect)  # , self.TA, self.TA3)
+                w_u, att_probs = self.hop(S, w_u, self.A3, self.A3, trainPM, trainSM, inspect)  # , self.TA, self.TA3)
             else:
-                w_u = self.hop(S, w_u, self.A2, self.A3, trainPM, trainSM, inspect)  # , self.TA, self.TA3)
+                #w_u = self.hop(S, w_u, self.A2, self.A3, trainPM, trainSM, inspect)  # , self.TA, self.TA3)
+                w_u = self.hop(S, w_u, self.A3, self.A3, trainPM, trainSM, inspect)  # , self.TA, self.TA3)
 
         if self.hops >= 3:
             if inspect:
-                w_u, att_probs = self.hop(S, w_u, self.A3, self.A4, trainPM, trainSM, inspect)  # , self.TA, self.TA4)
+                #w_u, att_probs = self.hop(S, w_u, self.A3, self.A4, trainPM, trainSM, inspect)  # , self.TA, self.TA4)
+                w_u, att_probs = self.hop(S, w_u, self.A4, self.A4, trainPM, trainSM, inspect)  # , self.TA, self.TA4)
             else:
-                w_u = self.hop(S, w_u, self.A3, self.A4, trainPM, trainSM, inspect)  # , self.TA, self.TA4)
+                #w_u = self.hop(S, w_u, self.A3, self.A4, trainPM, trainSM, inspect)  # , self.TA, self.TA4)
+                w_u = self.hop(S, w_u, self.A4, self.A4, trainPM, trainSM, inspect)  # , self.TA, self.TA4)
 
         # wx = torch.mm(w_u, self.W)
 
-        #wx = self.lin(w_u)
+
         #wx = self.lin_bn(wx)
         #wx = self.nonlin(wx)
 
         wx = w_u
+        #wx = self.dropout(self.lin(wx))
         # wx = self.lin2(w_u)
         # wx = self.nonlin(wx)
         wx = self.lin_final(wx)
-        wx = self.lin_final_bn(wx)
+        #wx = self.lin_final_bn(wx)
 
         # Final layer
         y_pred = wx
@@ -168,14 +184,16 @@ class N2N(torch.nn.Module):
         mem_emb_A_temp = mem_emb_A  # + temp_A_k
         mem_emb_C_temp = mem_emb_C  # + temp_C_k
 
+        #u_k_1 = self.G(u_k_1)
         u_k_1_list = [u_k_1] * self.story_size
 
         queries_temp = torch.squeeze(torch.stack(u_k_1_list, dim=1), 2)
-        probabs = mem_emb_A_temp * queries_temp
+        #probabs = mem_emb_A_temp * queries_temp
         # zero out the masked (padded) sentence embeddings:
-        probabs = probabs * PM.unsqueeze(2).expand_as(probabs)
-        #probabs = F.softmax(torch.squeeze(torch.sum(probabs, dim=2)), dim=1)
-        probabs = masked_softmax(torch.squeeze(torch.sum(probabs, dim=2)), PM)
+        #probabs = probabs * PM.unsqueeze(2).expand_as(probabs)
+        probabs = self.cos(mem_emb_A_temp, queries_temp)
+        #probabs = masked_softmax(torch.squeeze(torch.sum(probabs, dim=2)), PM)
+        probabs = masked_softmax(probabs, PM)
         mem_emb_C_temp = mem_emb_C_temp.permute(0, 2, 1)
         probabs_temp = probabs.unsqueeze(1).expand_as(mem_emb_C_temp)
 
@@ -183,12 +201,12 @@ class N2N(torch.nn.Module):
 
         o = torch.sum(pre_w, dim=2)
 
-        u_k = torch.squeeze(o) + torch.squeeze(u_k_1)
+        #u_k = torch.squeeze(o) #+ torch.squeeze(u_k_1)
 
         if inspect:
-            return u_k, probabs
+            return torch.cat((o, u_k_1, o+u_k_1, o*u_k_1), dim=1), probabs
         else:
-            return u_k
+            return torch.cat((o, u_k_1, o+u_k_1, o*u_k_1), dim=1)
 
     def embed_story(self, story_batch, embedding_layer, sent_mask):
         story_embedding_list = []

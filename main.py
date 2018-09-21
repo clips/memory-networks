@@ -19,7 +19,7 @@ from util import process_data, process_data_clicr
 
 
 def train_network(train_batches_id, val_batches_id, test_batches_id, data, val_data, test_data, word_idx, sentence_size,
-                  vocab_size, story_size, output_size, output_idx, save_model_path, args, log, max_inspect=5):
+                  vocab_size, story_size, output_size, output_idx, save_model_path, args, log, max_inspect=15):
     if args.inspect:
         inv_output_idx = {v: k for k, v in output_idx.items()}
     net = N2N(args.batch_size, args.embed_size, vocab_size, args.hops, story_size=story_size, args=args, word_idx=word_idx, output_size=output_size)
@@ -50,6 +50,10 @@ def train_network(train_batches_id, val_batches_id, test_batches_id, data, val_d
         current_len = 0
         current_correct = 0
         for batch, (s_batch, _) in zip(train_batch_gen, train_batches_id):
+            #if not data[s_batch][5] == "bcr.09.2009.2242.3":
+            #    continue
+            #else:
+            #    print()
             idx_out, idx_true, out, att_probs = epoch(batch, net, args.inspect)
             #if current_epoch == args.epochs - 1 and args.inspect and n_inspect < max_inspect:
             if args.inspect and n_inspect < max_inspect:
