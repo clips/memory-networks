@@ -97,7 +97,8 @@ class N2N(torch.nn.Module):
         #self.lin_bn = nn.BatchNorm1d(4*embed_size)
         self.cos = nn.CosineSimilarity(dim=2)
         #self.lin = nn.Linear(embed_size*4, embed_size*4)
-        self.lin_final = nn.Linear(embed_size*4, output_size)
+        #self.lin_final = nn.Linear(embed_size*4, output_size)
+        self.lin_final = nn.Linear(embed_size, output_size)
         #self.lin_final = nn.Linear(embed_size, vocab_size)
         #self.lin_final.weight = nn.Parameter(self.A1.weight)
         #self.lin_final_bn = nn.BatchNorm1d(output_size)
@@ -341,9 +342,12 @@ class KVN2N(N2N):
         #u_k = torch.squeeze(o) #+ torch.squeeze(u_k_1)
 
         if inspect:
-            return torch.cat((o, u_k_1, o+u_k_1, o*u_k_1), dim=1), probabs
+            #return torch.cat((o, u_k_1, o+u_k_1, o*u_k_1), dim=1), probabs
+            return o + u_k_1, probabs
         else:
-            return torch.cat((o, u_k_1, o+u_k_1, o*u_k_1), dim=1)
+            #return torch.cat((o, u_k_1, o+u_k_1, o*u_k_1), dim=1)
+            return o + u_k_1
+
 
     def embed_values(self, val_batch, embedding_layer):
         vals_variable = Variable(val_batch.data.type(long_tensor_type))

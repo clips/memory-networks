@@ -159,6 +159,50 @@ def load_clicr_kv(fn, ent_setup="ent", win_size=3, remove_notfound=True, max_n_l
     return questions
 
 
+def load_clicr_kv_ent_only(fn, ent_setup="ent", win_size=3, remove_notfound=True, max_n_load=None):
+    questions = []
+    raw = load_json(fn)
+    for c, datum in enumerate(raw[DATA_KEY]):
+        doc_txt = datum[DOC_KEY][TITLE_KEY] + "\n" + datum[DOC_KEY][CONTEXT_KEY]
+        keys, values = prepare_kv_ent_only(doc_txt, win_size=win_size)  # n_words*d
+        assert len(keys) == len(values)
+
+        sents = []
+        for sent in doc_txt.split("\n"):
+            if sent:
+                sents.append(to_entities(sent))
+        document = " ".join(sents)
+
+        for qa in datum[DOC_KEY][QAS_KEY]:
+            doc_raw = document.split()
+            query_id = qa[ID_KEY]
+            query = qa[QUERY_KEY]
+            query_win = prepare_q_for_kv(query, win_size=win_size)
+            ans_raw = ""
+            for ans in qa[ANS_KEY]:
+                if ans[ORIG_KEY] == "dataset":
+                    ans_raw = ("@entity" + "_".join(ans[TXT_KEY].split())).lower()
+            assert ans_raw
+            if remove_notfound:  # should be always false for dev and test
+                if ans_raw not in doc_raw:
+                    found_umls = False
+                    for ans in qa[ANS_KEY]:
+                        if ans[ORIG_KEY] == "UMLS":
+                            umls_answer = ("@entity" + "_".join(ans[TXT_KEY].split())).lower()
+                            if umls_answer in doc_raw:
+                                found_umls = True
+                                ans_raw = umls_answer
+                    if not found_umls:
+                        continue
+            cand_e = [w.lower() for w in doc_raw if w.startswith('@entity')]
+            cand_raw = [[e] for e in cand_e]
+            questions.append(((keys, values), query_win, [ans_raw], cand_raw, None, query_id))
+        if max_n_load is not None and c > max_n_load:
+            break
+
+    return questions
+
+
 
 def prepare_q_for_kv(q, win_size=3):
     q_line = ""
@@ -191,6 +235,39 @@ def prepare_q_for_kv(q, win_size=3):
 
 
 def prepare_kv(text, win_size=3):
+    values = []
+    keys = []  # n_words*(2*win_size)
+    for line in text.split("\n"):
+        idxs_start = [match.start() for match in re.finditer("BEG__", line)]
+        idxs_end = [match.end() for match in re.finditer("__END", line)]
+        for i_start, i_end in zip(idxs_start, idxs_end):
+            concept = line[i_start + len("BEG__"):i_end - len("__END")]
+            concept = "@entity" + concept.replace(" ", "_").lower()
+            txt_left = line[:i_start].strip()
+            lst_left = txt_left.split()
+            txt_right = line[i_end:].strip()
+            lst_right = txt_right.split()
+            lst = lst_left + lst_right
+            i = len(lst_left)
+            window_start = max(0, i - win_size)
+            window_end = min(len(lst), i + win_size)
+            contexts = []
+            # go over contexts
+            for j in range(window_start, window_end):
+                w = lst[j]
+                w = remove_concept_marks(w)
+                contexts.append(w.lower())
+            if not contexts:
+                continue
+            values.append(concept)
+            keys.append(contexts)
+
+    assert len(values) > 0
+
+    return keys, values
+
+
+def prepare_kv_ent_only(text, win_size=3):
     values = []
     keys = []  # n_words*(2*win_size)
     for line in text.split("\n"):

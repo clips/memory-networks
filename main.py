@@ -26,6 +26,7 @@ def train_network(train_batches_id, val_batches_id, test_batches_id, data, val_d
     if args.mode == "kv":
         net = KVN2N(args.batch_size, args.embed_size, vocab_size, args.hops, story_size=story_size, args=args,
                   word_idx=word_idx, output_size=output_size)
+        positional = False  # don't use positional encoding for KV network
     else:
         net = N2N(args.batch_size, args.embed_size, vocab_size, args.hops, story_size=story_size, args=args, word_idx=word_idx, output_size=output_size)
     if torch.cuda.is_available() and args.cuda == 1:
@@ -64,7 +65,7 @@ def train_network(train_batches_id, val_batches_id, test_batches_id, data, val_d
         current_correct = 0
         for batch, (s_batch, _) in zip(train_batch_gen, train_batches_id):
             if args.mode == "kv":
-                idx_out, idx_true, out, att_probs = epoch_kv(batch, net, args.inspect)
+                idx_out, idx_true, out, att_probs = epoch_kv(batch, net, args.inspect, positional)
             else:
                 idx_out, idx_true, out, att_probs = epoch(batch, net, args.inspect)
 
@@ -87,7 +88,7 @@ def train_network(train_batches_id, val_batches_id, test_batches_id, data, val_d
             accuracy = 100 * (current_correct / current_len)
             if args.mode == "kv":
                 val_acc, val_cor, val_tot = calculate_loss_and_accuracy_kv(net, val_batches_id, val_data, word_idx, sentence_size, story_size,
-                                                                    output_size, output_idx, vectorizer, args.inspect)
+                                                                    output_size, output_idx, vectorizer, args.inspect, positional)
             else:
                 val_acc, val_cor, val_tot = calculate_loss_and_accuracy(net, val_batches_id, val_data, word_idx,
                                                                     sentence_size, story_size,
@@ -134,7 +135,7 @@ def epoch(batch, net, inspect=False):
     return idx_out, idx_true, out, att_probs if inspect else None
 
 
-def epoch_kv(batch, net, inspect=False):
+def epoch_kv(batch, net, inspect=False, positional=True):
     key_batch = batch[0]
     value_batch = batch[1]
     query_batch = batch[2]
@@ -157,9 +158,9 @@ def epoch_kv(batch, net, inspect=False):
     QM = torch.stack(querymask_batch, dim=0) if querymask_batch is not None else None
 
     if inspect:
-        out, att_probs = net(K, V, Q, VM, PM, KM, QM, inspect, positional=False)
+        out, att_probs = net(K, V, Q, VM, PM, KM, QM, inspect, positional=positional)
     else:
-        out = net(K, V, Q, VM, PM, KM, QM, inspect, positional=False)
+        out = net(K, V, Q, VM, PM, KM, QM, inspect, positional=positional)
 
     _, idx_out = torch.max(out, 1)
     return idx_out, idx_true, out, att_probs if inspect else None
@@ -188,12 +189,12 @@ def calculate_loss_and_accuracy(net, batches_id, data, word_idx, sentence_size, 
     return 100 * (current_correct / current_len), current_correct, current_len
 
 
-def calculate_loss_and_accuracy_kv(net, batches_id, data, word_idx, sentence_size, story_size, output_size, output_idx, vectorizer, inspect=False):
+def calculate_loss_and_accuracy_kv(net, batches_id, data, word_idx, sentence_size, story_size, output_size, output_idx, vectorizer, inspect=False, positional=False):
     batch_gen = vectorized_batches_kv(batches_id, data, word_idx, sentence_size, story_size, output_size, output_idx, vectorizer)
     current_len = 0
     current_correct = 0
     for batch in batch_gen:
-        idx_out, idx_true, out, _ = epoch_kv(batch, net, inspect)
+        idx_out, idx_true, out, _ = epoch_kv(batch, net, inspect, positional)
         current_correct, current_len = update_counts(current_correct, current_len, idx_out, idx_true)
     return 100 * (current_correct / current_len), current_correct, current_len
 
@@ -203,6 +204,7 @@ def eval_network(vocab_size, story_size, sentence_size, model, word_idx, output_
     if args.mode == "kv":
         net = KVN2N(args.batch_size, args.embed_size, vocab_size, args.hops, story_size=story_size, args=args,
                   word_idx=word_idx, output_size=output_size)
+        positional = False  # don't use positional encoding for KV network
     else:
         net = N2N(args.batch_size, args.embed_size, vocab_size, args.hops, story_size=story_size, args=args, word_idx=word_idx, output_size=output_size)
     net.load_state_dict(torch.load(model))
@@ -234,7 +236,7 @@ def eval_network(vocab_size, story_size, sentence_size, model, word_idx, output_
 
     for batch, (s_batch, _) in zip(test_batch_gen, test_batches_id):
         if args.mode == "kv":
-            idx_out, idx_true, out, att_probs = epoch_kv(batch, net, args.inspect)
+            idx_out, idx_true, out, att_probs = epoch_kv(batch, net, args.inspect, positional)
         else:
             idx_out, idx_true, out, att_probs = epoch(batch, net, args.inspect)
         if args.inspect and n_inspect < max_inspect:
