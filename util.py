@@ -79,6 +79,153 @@ def process_data_clicr(args, log):
 
     return data, val_data, test_data, sentence_size, vocab_size, memory_size, word_idx, output_size, output_idx
 
+def process_data_clicr_kv(args, log):
+    data, val_data, test_data, vocab = load_data_clicr_kv(args.data_dir, args.ent_setup, log, args.win_size_kv, args.max_n_load)
+
+    '''
+    clicr data is of the form:
+    [
+        (
+            [
+                ['passage_w1', 'passage_w2', ...], 
+                ['passage_w1', 'passage_w2', ...]
+            ], 
+            ['q_w1', 'q_w2', ...], 
+            ['answer'],
+            [
+                ['cand_answer1'],
+                ['cand_answer2']
+            ],
+            cloze_start_id,
+            'query_id'
+        ),
+        .
+        .
+        .
+        ()
+    ]
+    '''
+    memory_size, k_size, v_size, vocab_size, word_idx, output_size, output_idx = calculate_parameter_values_clicr_kv(data=data, debug=args.debug,
+                                                                                        memory_size=args.memory_size,
+                                                                                        vocab=vocab, log=log)
+    if args.debug:
+        log.info("Vocabulary Size: {}".format(vocab_size))
+        log.info("Output Size: {}".format(output_size))
+
+    return data, val_data, test_data, k_size, v_size, vocab_size, memory_size, word_idx, output_size, output_idx
+
+
+def load_clicr_kv(fn, ent_setup="ent", win_size=3, remove_notfound=True, max_n_load=None):
+    questions = []
+    raw = load_json(fn)
+    for c, datum in enumerate(raw[DATA_KEY]):
+        doc_txt = datum[DOC_KEY][TITLE_KEY] + "\n" + datum[DOC_KEY][CONTEXT_KEY]
+        keys, values = prepare_kv(doc_txt, win_size=win_size)  # n_words*d
+        assert len(keys) == len(values)
+
+        sents = []
+        for sent in doc_txt.split("\n"):
+            if sent:
+                sents.append(to_entities(sent))
+        document = " ".join(sents)
+
+        for qa in datum[DOC_KEY][QAS_KEY]:
+            doc_raw = document.split()
+            query_id = qa[ID_KEY]
+            query = qa[QUERY_KEY]
+            query_win = prepare_q_for_kv(query, win_size=win_size)
+            ans_raw = ""
+            for ans in qa[ANS_KEY]:
+                if ans[ORIG_KEY] == "dataset":
+                    ans_raw = ("@entity" + "_".join(ans[TXT_KEY].split())).lower()
+            assert ans_raw
+            if remove_notfound:  # should be always false for dev and test
+                if ans_raw not in doc_raw:
+                    found_umls = False
+                    for ans in qa[ANS_KEY]:
+                        if ans[ORIG_KEY] == "UMLS":
+                            umls_answer = ("@entity" + "_".join(ans[TXT_KEY].split())).lower()
+                            if umls_answer in doc_raw:
+                                found_umls = True
+                                ans_raw = umls_answer
+                    if not found_umls:
+                        continue
+            cand_e = [w.lower() for w in doc_raw if w.startswith('@entity')]
+            cand_raw = [[e] for e in cand_e]
+            questions.append(((keys, values), query_win, [ans_raw], cand_raw, None, query_id))
+        if max_n_load is not None and c > max_n_load:
+            break
+
+    return questions
+
+
+
+def prepare_q_for_kv(q, win_size=3):
+    q_line = ""
+    for line in q.split("\n"):
+        if PLACEHOLDER_KEY in line:
+            q_line = line
+    assert q_line
+    q_line_lst = remove_concept_marks(q_line).split()
+    q_line = " ".join(q_line_lst)
+    idx_start = q_line.find(PLACEHOLDER_KEY)
+    idx_end = idx_start + len(PLACEHOLDER_KEY)
+    if len(q_line) > idx_end:
+        if q_line[idx_end] != " ":
+            q_line = q_line[:idx_end] + " " + q_line[idx_end:]
+    txt_left = q_line[:idx_start].rstrip().split()
+    txt_right = q_line[idx_end:].lstrip().split()
+    txt = txt_left + txt_right
+    assert not len(txt) == len(q_line.strip().split()), q_line  # removed placeholder
+    i = len(txt_left)
+    window_start = max(0, i - win_size)
+    window_end = min(len(txt), i + win_size)
+    contexts = []
+    # go over contexts
+    for j in range(window_start, window_end):
+        c = txt[j]
+        contexts.append(c.lower())
+    assert contexts
+
+    return contexts
+
+
+def prepare_kv(text, win_size=3):
+    values = []
+    keys = []  # n_words*(2*win_size)
+    for line in text.split("\n"):
+        idxs_start = [match.start() for match in re.finditer("BEG__", line)]
+        idxs_end = [match.end() for match in re.finditer("__END", line)]
+        for i_start, i_end in zip(idxs_start, idxs_end):
+            concept = line[i_start + len("BEG__"):i_end - len("__END")]
+            concept = "@entity" + concept.replace(" ", "_").lower()
+            txt_left = line[:i_start].strip()
+            lst_left = txt_left.split()
+            txt_right = line[i_end:].strip()
+            lst_right = txt_right.split()
+            lst = lst_left + lst_right
+            i = len(lst_left)
+            window_start = max(0, i - win_size)
+            window_end = min(len(lst), i + win_size)
+            contexts = []
+            # go over contexts
+            for j in range(window_start, window_end):
+                w = lst[j]
+                w = remove_concept_marks(w)
+                contexts.append(w.lower())
+            if not contexts:
+                continue
+            values.append(concept)
+            keys.append(contexts)
+
+    assert len(values) > 0
+
+    return keys, values
+
+
+def remove_concept_marks(txt, marker1="BEG__", marker2="__END"):
+    return txt.replace(marker1, "").replace(marker2, "")
+
 
 def process_data(args, log):
     test_size = .1
@@ -121,6 +268,22 @@ def load_data_clicr(data_dir, ent_setup, log, max_n_load=None):
     vocab_set = set()
     for s, q, a, _, _, _ in data:
         vocab_set.update([w for sent in s for w in sent] + q + a)
+
+    vocab = sorted(vocab_set)
+
+    return train_data, val_data, test_data, vocab
+
+def load_data_clicr_kv(data_dir, ent_setup, log, win_size=3, max_n_load=None):
+    #train_data, _ = load_clicr_ent_only(data_dir + "train1.0.json", ent_setup, max_n_load=max_n_load)
+    train_data = load_clicr_kv(data_dir + "train1.0.json", win_size=win_size, ent_setup=ent_setup, max_n_load=max_n_load)
+    val_data = load_clicr_kv(data_dir + "dev1.0.json", win_size=win_size, ent_setup=ent_setup, remove_notfound=False, max_n_load=max_n_load)
+    test_data = load_clicr_kv(data_dir + "test1.0.json", win_size=win_size, ent_setup=ent_setup, remove_notfound=False, max_n_load=max_n_load)
+
+    data = train_data + val_data + test_data  # TODO exclude test?
+
+    vocab_set = set()
+    for (k,v), q, a, _, _, _ in data:
+        vocab_set.update([w for sent in k for w in sent] + v + q + a)
 
     vocab = sorted(vocab_set)
 
@@ -556,6 +719,33 @@ def calculate_parameter_values_clicr(data, debug, memory_size, vocab, log):
     return memory_size, sentence_size, vocab_size, word_idx, output_size, output_idx
 
 
+def calculate_parameter_values_clicr_kv(data, debug, memory_size, vocab, log):
+    word_idx = dict((c, i + 1) for i, c in enumerate(vocab))
+    output_idx = dict()
+    i = 0
+    for w in vocab:
+        if w.startswith("@entity"):
+            output_idx[w] = i
+            i += 1
+    max_story_size = max(map(len, (k for (k,v), _, _, _, _, _ in data)))
+    mean_story_size = int(np.mean(list(map(len, (k for (k,v), _, _, _, _, _ in data)))))
+    k_size = max(map(len, chain.from_iterable(k for (k,v), _, _, _, _, _ in data)))
+    #v_size = max(map(len, chain.from_iterable(v for (k,v), _, _, _, _, _ in data)))
+    v_size = None
+    query_size = max(map(len, (q for _, q, _, _, _, _ in data)))
+    memory_size = min(memory_size, max_story_size)
+    vocab_size = len(word_idx) + 1  # +1 for nil word
+    output_size = len(output_idx)
+    #sentence_size = max(query_size, k_size)  # for the position
+    if debug is True:
+        log.info("Longest key length: {}".format(k_size))
+        log.info("Longest value length: {}".format(v_size))
+        log.info("Longest story length: {}".format(max_story_size))
+        log.info("Average story length: {}".format(mean_story_size))
+        log.info("Average memory size: {}".format(memory_size))
+    return memory_size, k_size, v_size, vocab_size, word_idx, output_size, output_idx
+
+
 def vectorize_task_data(batch_size, data, debug, memory_size, random_state, sentence_size, test,
                         test_size, word_idx, log):
     S, Q, Y = vectorize_data(data, word_idx, sentence_size, memory_size)
@@ -742,6 +932,91 @@ def vectorize_data_clicr(data, word_idx, output_size, output_idx, sentence_size,
 
     return np.array(S), np.array(Q), np.array(A), np.array(VM), np.array(PM), np.array(SM), np.array(QM)
 
+def vectorize_data_clicr_kv(data, word_idx, output_size, output_idx, k_size, memory_size):
+    '''
+    Vectorize stories (into keys and values) and queries.
+
+    If a key/value length < key/value_size, it will be padded with 0's.
+
+    If a story length < memory_size, the story will be padded with empty memories.
+    Empty memories are 1-D arrays of length sentence_size filled with 0's.
+
+    The answer array is returned as a one-hot encoding.
+
+    vocab_mask marks which elements (=words/entities) in V are found in the particular document
+
+    We also keep track of lengths of passages (=keys), keys, values and queries, so that we can mask during
+    vectorization the padded parts and ignore them in computation
+
+    '''
+    K = []
+    V = []
+    Q = []
+    A = []
+    VM = []  # vocabulary mask
+    PM = []  # passage mask
+    KM = []  # keys mask
+    QM = []  # query mask
+    inv_w_idx = {v: k for k, v in word_idx.items()}
+
+    for (k,v), query, answer, _, _, _ in data:
+        lq = max(0, k_size - len(query))
+        q = [word_idx[w] for w in query] + [0] * lq
+
+        ks = []
+        for win in k:
+            ls = max(0, k_size - len(win))
+            sent = [word_idx[w] for w in win] + [0] * ls
+            if len(sent) > k_size:  # can happen in test/val as sentence_size is calculated on train
+                sent = sent[:k_size]
+            ks.append(sent)
+
+        vs = [word_idx[val] for val in v]
+
+        assert len(ks) == len(vs)
+        if len(ks) > memory_size:
+            # TODO this is currently problematic as it relies on simple word match
+            # Use Jaccard similarity to determine the most relevant sentences
+            q_words = (q)
+            least_like_q = sorted(ks, key=functools.cmp_to_key(
+                lambda x, y: jaccard_similarity_score((x), q_words) < jaccard_similarity_score((y), q_words)))[
+                           :len(ks) - memory_size]
+            for sent in least_like_q:
+                # Remove the first occurrence of sent. A list comprehension as in [sent for sent in ss if sent not in least_like_q]
+                # should not be used, as it would remove multiple occurrences of the same sentence, some of which might actually make the cutoff.
+                del_id = ks.index(sent)
+                del ks[del_id]
+                del vs[del_id]
+            p_m = [1.] * memory_size
+        else:
+            # pad to memory_size
+            lm = max(0, memory_size - len(ks))
+            p_m = [1.] * len(ks) + [0.] * lm
+            for _ in range(lm):
+                ks.append([0] * k_size)
+                vs.append(0)
+        y = np.zeros(output_size)
+        for a in answer:
+            y[output_idx[a]] = 1
+            #y[word_idx[a]] = 1
+
+        vm = np.zeros_like(y)
+        # mask for all words in vocab not in the set of entities present in the values:
+        # TODO this doesn't work for the no-ent setting
+        vs_voc = {output_idx[inv_w_idx[i]] for i in set(np.array(vs).flatten()) if i!=0 and inv_w_idx[i] in output_idx}
+        vm[list(vs_voc)] = 1.
+
+        K.append(ks)
+        V.append(vs)
+        Q.append(q)
+        A.append(y)
+        VM.append(vm)
+        PM.append(p_m)
+        KM = np.clip(np.array(K), 0., 1.)
+        QM.append(np.clip(np.array(q), 0., 1.))
+
+    return np.array(K), np.array(V), np.array(Q), np.array(A), np.array(VM), np.array(PM), np.array(KM), np.array(QM)
+
 
 def generate_batches(batches_tr, batches_v, batches_te, train, val, test):
     train_batches = get_batch_from_batch_list(batches_tr, train)
@@ -776,6 +1051,24 @@ def vectorized_batches(batches, data, word_idx, sentence_size, memory_size, outp
                list(dataQM) if dataQM is not None else None
                ]
 
+def vectorized_batches_kv(batches, data, word_idx, k_size, memory_size, output_size, output_idx, vectorizer=vectorize_data_clicr_kv, shuffle=False):
+    # batches are of form : [(0,2), (2,4),...]
+    if shuffle:
+        np.random.shuffle(batches)
+    for s_batch, e_batch in batches:
+        dataK, dataV, dataQ, dataA, dataVM, dataPM, dataKM, dataQM = vectorizer(data[s_batch:e_batch], word_idx, output_size, output_idx, k_size, memory_size)
+        dataA, dataQ, dataK, dataV, dataVM, dataPM, dataKM, dataQM = extract_tensors_kv(dataA, dataQ, dataK, dataV, dataVM, dataPM, dataKM, dataQM)
+
+        yield [list(dataK),
+               list(dataV),
+               list(dataQ),
+               list(dataA),
+               list(dataVM) if dataVM is not None else None,
+               list(dataPM) if dataPM is not None else None,
+               list(dataKM) if dataKM is not None else None,
+               list(dataQM) if dataQM is not None else None
+               ]
+
 
 def extract_tensors(A, Q, S, VM, PM, SM, QM):
     A = torch.from_numpy(A).type(long_tensor_type)
@@ -787,6 +1080,19 @@ def extract_tensors(A, Q, S, VM, PM, SM, QM):
     SM = torch.from_numpy(SM).type(float_tensor_type) if SM is not None else None
     QM = torch.from_numpy(QM).type(float_tensor_type) if QM is not None else None
     return A, Q, S, VM, PM, SM, QM
+
+
+def extract_tensors_kv(A, Q, K, V, VM, PM, KM, QM):
+    A = torch.from_numpy(A).type(long_tensor_type)
+    K = torch.from_numpy(K).type(float_tensor_type)
+    V = torch.from_numpy(V).type(float_tensor_type)
+    Q = np.expand_dims(Q, 1)
+    Q = torch.from_numpy(Q).type(long_tensor_type)
+    VM = torch.from_numpy(VM).type(float_tensor_type) if VM is not None else None
+    PM = torch.from_numpy(PM).type(float_tensor_type) if PM is not None else None
+    KM = torch.from_numpy(KM).type(float_tensor_type) if KM is not None else None
+    QM = torch.from_numpy(QM).type(float_tensor_type) if QM is not None else None
+    return A, Q, K, V, VM, PM, KM, QM
 
 
 def construct_s_q_a_batch(batches, batched_objects, S, Q, A):

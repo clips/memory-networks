@@ -93,9 +93,10 @@ class N2N(torch.nn.Module):
         # self.W = nn.Parameter(torch.randn(embed_size, vocab_size), requires_grad=True)
         #self.nonlin = nn.Tanh()
         #self.lin = nn.Linear(embed_size, embed_size)
-        #self.dropout = nn.Dropout(0.3)
-        #self.lin_bn = nn.BatchNorm1d(embed_size)
+        #self.dropout = nn.Dropout(0.5)
+        #self.lin_bn = nn.BatchNorm1d(4*embed_size)
         self.cos = nn.CosineSimilarity(dim=2)
+        #self.lin = nn.Linear(embed_size*4, embed_size*4)
         self.lin_final = nn.Linear(embed_size*4, output_size)
         #self.lin_final = nn.Linear(embed_size, vocab_size)
         #self.lin_final.weight = nn.Parameter(self.A1.weight)
@@ -208,14 +209,18 @@ class N2N(torch.nn.Module):
         else:
             return torch.cat((o, u_k_1, o+u_k_1, o*u_k_1), dim=1)
 
-    def embed_story(self, story_batch, embedding_layer, sent_mask):
+    def embed_story(self, story_batch, embedding_layer, sent_mask, positional=True):
         story_embedding_list = []
-        position_encoding = get_position_encoding(story_batch.size()[1], story_batch.size()[2], self.embed_size)
+        if positional:
+            position_encoding = get_position_encoding(story_batch.size()[1], story_batch.size()[2], self.embed_size)
+        else:
+            position_encoding = None
 
         for story in story_batch.split(1):
             story_variable = Variable(torch.squeeze(story, 0).data.type(long_tensor_type))
             story_embedding = embedding_layer(story_variable)
-            story_embedding = story_embedding * position_encoding
+            if position_encoding is not None:
+                story_embedding = story_embedding * position_encoding
             story_embedding_list.append(story_embedding)
 
         batch_story_embedding_temp = torch.stack(story_embedding_list)
@@ -228,3 +233,119 @@ class N2N(torch.nn.Module):
             batch_story_embedding = batch_story_embedding / normalizer
 
         return torch.squeeze(batch_story_embedding, dim=2)
+
+
+class KVN2N(N2N):
+    def forward(self, trainK, trainV, trainQ, trainVM, trainPM, trainKM, trainQM, inspect, positional=True):
+        """
+        :param trainVM: a B*V tensor masking all predictions which are not words/entities in the relevant document
+        """
+        K = Variable(trainK, requires_grad=False)
+        V = Variable(trainV, requires_grad=False)
+        Q = Variable(torch.squeeze(trainQ, 1), requires_grad=False)
+
+        queries = self.A1(Q)
+        #queries_emb = self.B1(Q)
+
+        if positional:
+            position_encoding = get_position_encoding(queries.size(0), queries.size(1), self.embed_size)
+            queries = queries * position_encoding
+        # zero out the masked (padded) word embeddings:
+        queries = queries * trainQM.unsqueeze(2).expand_as(queries)
+
+        queries_rep = torch.sum(queries, dim=1)
+        # w_u = queries_sum
+        # for i in range(self.hops):
+        #     w_u = self.one_hop(S, w_u, self.A[i], self.A[i + 1], self.TA[i], self.TA[i + 1])
+        if self.args.average_embs:
+            normalizer = torch.sum(trainQM, dim=1).unsqueeze(1).expand_as(queries_rep)
+            normalizer[normalizer==0.] = float("Inf")
+            queries_rep = queries_rep / normalizer
+
+        if inspect:
+            #w_u, att_probs = self.hop(S, queries_rep, self.A1, self.A2, trainPM, trainSM, inspect)  # , self.TA, self.TA2)
+            w_u, att_probs = self.hop(K, V, queries_rep, self.A1, self.A1, trainPM, trainKM, inspect, positional=positional)  # , self.TA, self.TA2)
+        else:
+            #w_u = self.hop(S, queries_rep, self.A1, self.A2, trainPM, trainSM, inspect)  # , self.TA, self.TA2)
+            w_u = self.hop(K, V, queries_rep, self.A1, self.A1, trainPM, trainKM, inspect, positional=positional)  # , self.TA, self.TA2)
+
+        if self.hops >= 2:
+            if inspect:
+                #w_u, att_probs = self.hop(S, w_u, self.A2, self.A3, trainPM, trainSM, inspect)  # , self.TA, self.TA3)
+                w_u, att_probs = self.hop(K, V, w_u, self.A3, self.A3, trainPM, trainKM, inspect, positional=positional)  # , self.TA, self.TA3)
+            else:
+                #w_u = self.hop(S, w_u, self.A2, self.A3, trainPM, trainSM, inspect)  # , self.TA, self.TA3)
+                w_u = self.hop(K, V, w_u, self.A3, self.A3, trainPM, trainKM, inspect, positional=positional)  # , self.TA, self.TA3)
+
+        if self.hops >= 3:
+            if inspect:
+                #w_u, att_probs = self.hop(S, w_u, self.A3, self.A4, trainPM, trainSM, inspect)  # , self.TA, self.TA4)
+                w_u, att_probs = self.hop(K, V, w_u, self.A4, self.A4, trainPM, trainKM, inspect, positional=positional)  # , self.TA, self.TA4)
+            else:
+                #w_u = self.hop(S, w_u, self.A3, self.A4, trainPM, trainSM, inspect)  # , self.TA, self.TA4)
+                w_u = self.hop(K, V, w_u, self.A4, self.A4, trainPM, trainKM, inspect, positional=positional)  # , self.TA, self.TA4)
+
+        # wx = torch.mm(w_u, self.W)
+
+
+        #wx = self.lin_bn(wx)
+        #wx = self.nonlin(wx)
+
+        wx = w_u
+        #wx = self.dropout(self.lin(wx))
+        #wx = self.lin_bn(self.lin(w_u))
+        #wx = self.nonlin(wx)
+        #wx = self.dropout(wx)
+        wx = self.lin_final(wx)
+        #wx = self.lin_final_bn(wx)
+
+        # Final layer
+        y_pred = wx
+        # mask for output answers
+
+        #if trainVM is not None:
+        #    y_pred = y_pred * trainVM
+        #return y_pred
+
+        y_pred_m = trainVM
+        #y_pred_m = None
+        out = masked_log_softmax(y_pred, y_pred_m)
+        if inspect:
+            return out, att_probs
+        else:
+            return out
+
+    def hop(self, trainK, trainV, u_k_1, A_k, C_k, PM, KM, inspect, positional=True):  # , temp_A_k, temp_C_k):
+        mem_emb_A = self.embed_story(trainK, A_k, KM, positional=positional)  # B*S*d
+        mem_emb_C = self.embed_values(trainV, C_k)  # B*S*d
+
+        mem_emb_A_temp = mem_emb_A  # + temp_A_k
+        mem_emb_C_temp = mem_emb_C  # + temp_C_k
+
+        #u_k_1 = self.G(u_k_1)
+        u_k_1_list = [u_k_1] * self.story_size
+
+        queries_temp = torch.squeeze(torch.stack(u_k_1_list, dim=1), 2)
+        #probabs = mem_emb_A_temp * queries_temp
+        # zero out the masked (padded) sentence embeddings:
+        #probabs = probabs * PM.unsqueeze(2).expand_as(probabs)
+        probabs = self.cos(mem_emb_A_temp, queries_temp)  # B*S
+        probabs = masked_softmax(probabs, PM)  # B*S
+        mem_emb_C_temp = mem_emb_C_temp.permute(0, 2, 1)   # B*d*S
+        probabs_temp = probabs.unsqueeze(1).expand_as(mem_emb_C_temp)
+
+        pre_w = torch.mul(mem_emb_C_temp, probabs_temp)
+
+        o = torch.sum(pre_w, dim=2)
+
+        #u_k = torch.squeeze(o) #+ torch.squeeze(u_k_1)
+
+        if inspect:
+            return torch.cat((o, u_k_1, o+u_k_1, o*u_k_1), dim=1), probabs
+        else:
+            return torch.cat((o, u_k_1, o+u_k_1, o*u_k_1), dim=1)
+
+    def embed_values(self, val_batch, embedding_layer):
+        vals_variable = Variable(val_batch.data.type(long_tensor_type))
+
+        return embedding_layer(vals_variable)
