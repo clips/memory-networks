@@ -222,11 +222,11 @@ def eval_network(vocab_size, story_size, sentence_size, model, word_idx, output_
     else:
         raise NotImplementedError
     if args.mode == "standard":
-        test_batch_gen = vectorized_batches(test_batches_id, data, word_idx, sentence_size, story_size, output_size,
+        test_batch_gen = vectorized_batches(test_batches_id, test, word_idx, sentence_size, story_size, output_size,
                                              output_idx, vectorizer, shuffle=args.shuffle)
     elif args.mode == "kv":
         k_size = sentence_size
-        test_batch_gen = vectorized_batches_kv(test_batches_id, data, word_idx, k_size, story_size,
+        test_batch_gen = vectorized_batches_kv(test_batches_id, test, word_idx, k_size, story_size,
                                                 output_size, output_idx, vectorizer, shuffle=args.shuffle)
     current_len = 0
     current_correct = 0
@@ -239,11 +239,11 @@ def eval_network(vocab_size, story_size, sentence_size, model, word_idx, output_
             idx_out, idx_true, out, att_probs = epoch(batch, net, args.inspect)
         if args.inspect and n_inspect < max_inspect:
             if args.mode == "kv":
-                inspect_kv(out, idx_true, os.path.dirname(save_model_path), current_epoch, s_batch, att_probs,
-                           inv_output_idx, data, args, log)
+                inspect_kv(out, idx_true, logdir, "eval", s_batch, att_probs,
+                           inv_output_idx, test, args, log)
             else:
-                inspect(out, idx_true, os.path.dirname(save_model_path), current_epoch, s_batch, att_probs,
-                        inv_output_idx, data, args, log)
+                inspect(out, idx_true, logdir, "eval", s_batch, att_probs,
+                        inv_output_idx, test, args, log)
             n_inspect += 1
         if preds is not None:
             for c, i in enumerate(idx_out):
