@@ -402,6 +402,10 @@ class KVAtt(torch.nn.Module):
 
         att_scores = self.attention(K, queries_rep, self.A1, trainKM, positional=positional)  # , self.TA, self.TA2)
 
+        # map the att. scores to the output vector, then take the softmax
+        #_, idx_out = torch.max(att_probs, 1)
+        #v_idx_out = Variable(torch.cuda.LongTensor([V[c, i] for c, i in enumerate(idx_out)]), requires_grad=False)
+
         att_probs = masked_log_softmax(att_scores, trainPM)
 
         return att_probs
