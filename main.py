@@ -11,7 +11,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from logger import get_logger
-from net import N2N, KVN2N
+from net import N2N, KVN2N, KVAtt
 from util import long_tensor_type, vectorize_data_clicr, vectorized_batches, vectorize_data, evaluate_clicr, save_json, \
     get_q_ids_clicr, remove_missing_preds, deentitize, process_data_clicr_kv, vectorized_batches_kv, \
     vectorize_data_clicr_kv
