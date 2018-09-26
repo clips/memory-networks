@@ -819,7 +819,7 @@ def calculate_parameter_values_clicr_kv(data, debug, memory_size, vocab, log):
         log.info("Longest value length: {}".format(v_size))
         log.info("Longest story length: {}".format(max_story_size))
         log.info("Average story length: {}".format(mean_story_size))
-        log.info("Average memory size: {}".format(memory_size))
+        log.info("Memory size: {}".format(memory_size))
     return memory_size, k_size, v_size, vocab_size, word_idx, output_size, output_idx
 
 
@@ -1081,6 +1081,93 @@ def vectorize_data_clicr_kv(data, word_idx, output_size, output_idx, k_size, mem
         # mask for all words in vocab not in the set of entities present in the values:
         # TODO this doesn't work for the no-ent setting
         vs_voc = {output_idx[inv_w_idx[i]] for i in set(np.array(vs).flatten()) if i!=0 and inv_w_idx[i] in output_idx}
+        vm[list(vs_voc)] = 1.
+
+        K.append(ks)
+        V.append(vs)
+        Q.append(q)
+        A.append(y)
+        VM.append(vm)
+        PM.append(p_m)
+        KM = np.clip(np.array(K), 0., 1.)
+        QM.append(np.clip(np.array(q), 0., 1.))
+
+    return np.array(K), np.array(V), np.array(Q), np.array(A), np.array(VM), np.array(PM), np.array(KM), np.array(QM)
+
+
+def vectorize_data_clicr_kvatt(data, word_idx, output_size, output_idx, k_size, memory_size):
+    '''
+    Vectorize stories (into keys and values) and queries. Unlike in vectorization for KVMemNNs, we
+    use here the output_idx for encoding the values, since we need values in prediction and for comparison
+    to gold answers (which also use output_idx).
+
+    If a key/value length < key/value_size, it will be padded with 0's.
+
+    If a story length < memory_size, the story will be padded with empty memories.
+    Empty memories are 1-D arrays of length sentence_size filled with 0's.
+
+    The answer array is returned as a one-hot encoding.
+
+    vocab_mask marks which elements (=words/entities) in V are found in the particular document
+
+    We also keep track of lengths of passages (=keys), keys, values and queries, so that we can mask during
+    vectorization the padded parts and ignore them in computation
+
+    '''
+    K = []
+    V = []
+    Q = []
+    A = []
+    VM = []  # vocabulary mask
+    PM = []  # passage mask
+    KM = []  # keys mask
+    QM = []  # query mask
+    inv_w_idx = {v: k for k, v in word_idx.items()}
+
+    for (k,v), query, answer, _, _, _ in data:
+        lq = max(0, k_size - len(query))
+        q = [word_idx[w] for w in query] + [0] * lq
+
+        ks = []
+        for win in k:
+            ls = max(0, k_size - len(win))
+            sent = [word_idx[w] for w in win] + [0] * ls
+            if len(sent) > k_size:  # can happen in test/val as sentence_size is calculated on train
+                sent = sent[:k_size]
+            ks.append(sent)
+
+        vs = [output_idx[val] for val in v]
+
+        assert len(ks) == len(vs)
+        if len(ks) > memory_size:
+            # TODO this is currently problematic as it relies on simple word match
+            # Use Jaccard similarity to determine the most relevant sentences
+            q_words = (q)
+            least_like_q = sorted(ks, key=functools.cmp_to_key(
+                lambda x, y: jaccard_similarity_score((x), q_words) < jaccard_similarity_score((y), q_words)))[
+                           :len(ks) - memory_size]
+            for sent in least_like_q:
+                # Remove the first occurrence of sent. A list comprehension as in [sent for sent in ss if sent not in least_like_q]
+                # should not be used, as it would remove multiple occurrences of the same sentence, some of which might actually make the cutoff.
+                del_id = ks.index(sent)
+                del ks[del_id]
+                del vs[del_id]
+            p_m = [1.] * memory_size
+        else:
+            # pad to memory_size
+            lm = max(0, memory_size - len(ks))
+            p_m = [1.] * len(ks) + [0.] * lm
+            for _ in range(lm):
+                ks.append([0] * k_size)
+                vs.append(0)
+        y = np.zeros(output_size)
+        for a in answer:
+            y[output_idx[a]] = 1
+            #y[word_idx[a]] = 1
+
+        vm = np.zeros_like(y)
+        # mask for all words in vocab not in the set of entities present in the values:
+        vs_voc = set(np.array(vs).flatten())
         vm[list(vs_voc)] = 1.
 
         K.append(ks)

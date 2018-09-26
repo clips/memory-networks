@@ -5,9 +5,6 @@ import os
 import torch
 from torch.autograd import Variable
 from torch.nn.utils import clip_grad_norm_
-import matplotlib as mpl
-mpl.use('Agg')
-import matplotlib.pyplot as plt
 import numpy as np
 
 from logger import get_logger
@@ -30,7 +27,7 @@ def train_network_kvatt(train_batches_id, val_batches_id, test_batches_id, data,
     log.info("{}\n".format(net))
     optimizer = torch.optim.Adam(net.parameters(), lr=args.lr)
     optimizer.zero_grad()
-    vectorizer = vectorize_data_clicr_kv
+    vectorizer = vectorize_data_clicr_kvatt
     running_loss = 0.0
     best_val_acc_yet = 0.0
     for current_epoch in range(args.epochs):
@@ -43,6 +40,7 @@ def train_network_kvatt(train_batches_id, val_batches_id, test_batches_id, data,
             idx_out, idx_true, out = epoch_kvatt(batch, net, args.inspect, positional)
             loss = criterion(out, idx_true)
             loss.backward()
+            sys.exit(1)
             clip_grad_norm_(net.parameters(), 40)
             running_loss += loss
             current_correct, current_len = update_counts(current_correct, current_len, idx_out, idx_true)
