@@ -1248,8 +1248,8 @@ def extract_tensors(A, Q, S, VM, PM, SM, QM):
 
 def extract_tensors_kv(A, Q, K, V, VM, PM, KM, QM):
     A = torch.from_numpy(A).type(long_tensor_type)
-    K = torch.from_numpy(K).type(float_tensor_type)
-    V = torch.from_numpy(V).type(float_tensor_type)
+    K = torch.from_numpy(K).type(long_tensor_type)
+    V = torch.from_numpy(V).type(long_tensor_type)
     Q = np.expand_dims(Q, 1)
     Q = torch.from_numpy(Q).type(long_tensor_type)
     VM = torch.from_numpy(VM).type(float_tensor_type) if VM is not None else None

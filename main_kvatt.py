@@ -19,14 +19,15 @@ def train_network_kvatt(train_batches_id, val_batches_id, test_batches_id, data,
                   vocab_size, story_size, output_size, output_idx, save_model_path, args, log):
 
     net = KVAtt(args.batch_size, args.embed_size, vocab_size, story_size=story_size, args=args,
-                  word_idx=word_idx)
+                  word_idx=word_idx, output_size=output_size)
     positional = False  # don't use positional encoding for KV network
     if torch.cuda.is_available() and args.cuda == 1:
         net = net.cuda()
     criterion = torch.nn.NLLLoss()
     log.info("{}\n".format(net))
-    optimizer = torch.optim.Adam(net.parameters(), lr=args.lr)
-    optimizer.zero_grad()
+    if not args.freeze_pretrained_word_embed:
+        optimizer = torch.optim.Adam(net.parameters(), lr=args.lr)
+        optimizer.zero_grad()
     vectorizer = vectorize_data_clicr_kvatt
     running_loss = 0.0
     best_val_acc_yet = 0.0
@@ -37,31 +38,32 @@ def train_network_kvatt(train_batches_id, val_batches_id, test_batches_id, data,
         current_len = 0
         current_correct = 0
         for batch, (s_batch, _) in zip(train_batch_gen, train_batches_id):
-            idx_out, idx_true, out = epoch_kvatt(batch, net, args.inspect, positional)
-            loss = criterion(out, idx_true)
-            loss.backward()
-            sys.exit(1)
-            clip_grad_norm_(net.parameters(), 40)
-            running_loss += loss
+            idx_out, idx_true, out, att_probs = epoch_kvatt(batch, net, args.inspect, positional)
             current_correct, current_len = update_counts(current_correct, current_len, idx_out, idx_true)
-            optimizer.step()
-            optimizer.zero_grad()
-        if current_epoch % args.log_epochs == 0:
-            accuracy = 100 * (current_correct / current_len)
-            if args.mode == "kv":
-                val_acc, val_cor, val_tot = calculate_loss_and_accuracy_kvatt(net, val_batches_id, val_data, word_idx, sentence_size, story_size,
-                                                                    output_size, output_idx, vectorizer, args.inspect, positional)
-            log.info("Epochs: {}, Train Accuracy: {:.3f}, Loss: {:.3f}, Val_Acc:{:.3f} ({}/{})".format(current_epoch, accuracy,
-                                                                                running_loss.item(),
-                                                                                val_acc, val_cor, val_tot))
-            if best_val_acc_yet <= val_acc and args.save_model:
-                torch.save(net.state_dict(), save_model_path)
-                best_val_acc_yet = val_acc
+            if not args.freeze_pretrained_word_embed:
+                loss = criterion(out, idx_true)
+                loss.backward()
+                clip_grad_norm_(net.parameters(), 40)
+                running_loss += loss
+                optimizer.step()
+                optimizer.zero_grad()
+        if not args.freeze_pretrained_word_embed:
+            if current_epoch % args.log_epochs == 0:
+                accuracy = 100 * (current_correct / current_len)
+                if args.mode == "kv":
+                    val_acc, val_cor, val_tot = calculate_loss_and_accuracy_kvatt(net, val_batches_id, val_data, word_idx, sentence_size, story_size,
+                                                                        output_size, output_idx, vectorizer, args.inspect, positional)
+                log.info("Epochs: {}, Train Accuracy: {:.3f}, Loss: {:.3f}, Val_Acc:{:.3f} ({}/{})".format(current_epoch, accuracy,
+                                                                                    running_loss.item(),
+                                                                                    val_acc, val_cor, val_tot))
+                if best_val_acc_yet <= val_acc and args.save_model:
+                    torch.save(net.state_dict(), save_model_path)
+                    best_val_acc_yet = val_acc
 
-        if current_epoch % args.anneal_epoch == 0 and current_epoch != 0:
-            for param_group in optimizer.param_groups:
-                param_group['lr'] = param_group['lr'] / args.anneal_factor
-        running_loss = 0.0
+            if current_epoch % args.anneal_epoch == 0 and current_epoch != 0:
+                for param_group in optimizer.param_groups:
+                    param_group['lr'] = param_group['lr'] / args.anneal_factor
+            running_loss = 0.0
 
 
 def epoch_kvatt(batch, net, inspect=False, positional=True):
@@ -86,11 +88,9 @@ def epoch_kvatt(batch, net, inspect=False, positional=True):
     KM = torch.stack(keymask_batch, dim=0) if keymask_batch is not None else None
     QM = torch.stack(querymask_batch, dim=0) if querymask_batch is not None else None
 
-    att_probs = net(K, V, Q, VM, PM, KM, QM, inspect, positional=positional)
+    out, idx_out, att_probs = net(K, V, Q, VM, PM, KM, QM, inspect, positional=positional)
 
-    _, idx_out = torch.max(att_probs, 1)
-    v_idx_out = Variable(torch.cuda.LongTensor([V[c, i] for c, i in enumerate(idx_out)]), requires_grad=False)
-    return v_idx_out, idx_true, att_probs
+    return idx_out, idx_true, out, att_probs
 
 def update_counts(current_correct, current_len, idx_out, idx_true):
     batch_len, correct = count_predictions(idx_true, idx_out)
@@ -110,59 +110,31 @@ def calculate_loss_and_accuracy_kvatt(net, batches_id, data, word_idx, sentence_
     current_len = 0
     current_correct = 0
     for batch in batch_gen:
-        idx_out, idx_true, out = epoch_kvatt(batch, net, inspect, positional)
+        idx_out, idx_true, out, att_probs = epoch_kvatt(batch, net, inspect, positional)
         current_correct, current_len = update_counts(current_correct, current_len, idx_out, idx_true)
     return 100 * (current_correct / current_len), current_correct, current_len
 
 
 def eval_network(vocab_size, story_size, sentence_size, model, word_idx, output_size, output_idx, test_batches_id, test, log, logdir, args, cuda=0., test_q_ids=None, max_inspect=5, ignore_missing_preds=False):
     log.info("Evaluating")
-    if args.mode == "kv":
-        net = KVN2N(args.batch_size, args.embed_size, vocab_size, args.hops, story_size=story_size, args=args,
+    net = KVAtt(args.batch_size, args.embed_size, vocab_size, story_size=story_size, args=args,
                   word_idx=word_idx, output_size=output_size)
-        positional = False  # don't use positional encoding for KV network
-    else:
-        net = N2N(args.batch_size, args.embed_size, vocab_size, args.hops, story_size=story_size, args=args, word_idx=word_idx, output_size=output_size)
-    net.load_state_dict(torch.load(model))
+    positional = False  # don't use positional encoding for KV network
+    if model is not None:
+        net.load_state_dict(torch.load(model))
     inv_output_idx = {v: k for k, v in output_idx.items()}
-    if args.inspect:
-        n_inspect = 0
-
     if torch.cuda.is_available() and cuda == 1:
         net = net.cuda()
-    if args.dataset == "clicr":
-        if args.mode == "standard":
-            vectorizer = vectorize_data_clicr
-        elif args.mode == "kv":
-            vectorizer = vectorize_data_clicr_kv
-    elif args.dataset == "babi":
-        vectorizer = vectorize_data
-    else:
-        raise NotImplementedError
-    if args.mode == "standard":
-        test_batch_gen = vectorized_batches(test_batches_id, test, word_idx, sentence_size, story_size, output_size,
-                                             output_idx, vectorizer, shuffle=args.shuffle)
-    elif args.mode == "kv":
-        k_size = sentence_size
-        test_batch_gen = vectorized_batches_kv(test_batches_id, test, word_idx, k_size, story_size,
+    vectorizer = vectorize_data_clicr_kvatt
+    k_size = sentence_size
+    test_batch_gen = vectorized_batches_kv(test_batches_id, test, word_idx, k_size, story_size,
                                                 output_size, output_idx, vectorizer, shuffle=args.shuffle)
     current_len = 0
     current_correct = 0
     preds = {} if args.dataset == "clicr" else None
 
     for batch, (s_batch, _) in zip(test_batch_gen, test_batches_id):
-        if args.mode == "kv":
-            idx_out, idx_true, out, att_probs = epoch_kv(batch, net, args.inspect, positional)
-        else:
-            idx_out, idx_true, out, att_probs = epoch(batch, net, args.inspect)
-        if args.inspect and n_inspect < max_inspect:
-            if args.mode == "kv":
-                inspect_kv(out, idx_true, logdir, "eval", s_batch, att_probs,
-                           inv_output_idx, test, args, log)
-            else:
-                inspect(out, idx_true, logdir, "eval", s_batch, att_probs,
-                        inv_output_idx, test, args, log)
-            n_inspect += 1
+        idx_out, idx_true, out, att_probs = epoch_kvatt(batch, net, args.inspect, positional)
         if preds is not None:
             for c, i in enumerate(idx_out):
                 # {query_id: answer}
@@ -208,7 +180,7 @@ def main():
                             help="anneal every [anneal-epoch] epoch, default: 25")
     arg_parser.add_argument("--anneal-factor", type=int, default=2,
                             help="factor to anneal by every 'anneal-epoch(s)', default: 2")
-    arg_parser.add_argument("--average_embs", type=int, default=1, help="Flag to average context embs instead of summing.")
+    arg_parser.add_argument("--average-embs", type=int, default=1, help="Flag to average context embs instead of summing.")
     arg_parser.add_argument("--batch-size", type=int, default=32, help="batch size for training, default: 32")
     arg_parser.add_argument("--cuda", type=int, default=0, help="train on GPU, default: 0")
     arg_parser.add_argument("--data-dir", type=str, default="./data/tasks_1-20_v1-2/en",
@@ -250,7 +222,7 @@ def main():
     exp_dir = "./experiments/"
     if not os.path.exists(exp_dir):
         os.makedirs(exp_dir)
-    if args.train == 0 and args.eval == 1:
+    if args.train == 0 and args.eval == 1 and args.load_model_path != "None":
         logdir = os.path.dirname(args.load_model_path)
         log = get_logger(logdir + "/log_eval")
     else:
@@ -286,12 +258,13 @@ def main():
         train_network_kvatt(train_batches_id, val_batches_id, test_batches_id, data, val_data, test_data, word_idx,
                       k_size, story_size=story_size,
                       vocab_size=vocab_size, output_size=output_size, output_idx=output_idx, save_model_path=save_model_path, args=args, log=log)
-    #if args.eval == 1:
-    #    if args.train == 1:
-    #        model = save_model_path
-    #    else:
-    #        model = args.load_model_path
-    #    eval_network(vocab_size, story_size, k_size, model, word_idx, output_size, output_idx, test_batches_id, test_data, log, logdir, args, cuda=args.cuda, test_q_ids=test_q_ids, ignore_missing_preds=args.ignore_missing_preds)
+    if args.eval == 1:
+        if args.train == 1:
+            model = save_model_path
+        else:
+            #model = args.load_model_path
+            model = None
+        eval_network(vocab_size, story_size, k_size, model, word_idx, output_size, output_idx, test_batches_id, test_data, log, logdir, args, cuda=args.cuda, test_q_ids=test_q_ids, ignore_missing_preds=args.ignore_missing_preds)
 
 
 if __name__ == '__main__':

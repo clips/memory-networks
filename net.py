@@ -4,7 +4,7 @@ from torch.autograd import Variable
 from torch.nn import functional as F
 
 from net_util import masked_log_softmax, masked_softmax, masked_softmin
-from util import get_position_encoding, long_tensor_type, load_emb
+from util import get_position_encoding, long_tensor_type, load_emb, float_tensor_type
 
 
 class N2N(torch.nn.Module):
@@ -357,7 +357,7 @@ class KVAtt(torch.nn.Module):
     """
     A key-value attention ~ max. embedding similarity between q and p
     """
-    def __init__(self, batch_size, embed_size, vocab_size, story_size, args, word_idx):
+    def __init__(self, batch_size, embed_size, vocab_size, story_size, args, word_idx, output_size):
         super(KVAtt, self).__init__()
 
         self.embed_size = embed_size
@@ -367,6 +367,7 @@ class KVAtt(torch.nn.Module):
         self.freeze_pretrained_word_embed = args.freeze_pretrained_word_embed
         self.word_idx = word_idx
         self.args = args
+        self.output_size = output_size
 
         # story embedding
         if args.pretrained_word_embed:
@@ -401,10 +402,16 @@ class KVAtt(torch.nn.Module):
             queries_rep = queries_rep / normalizer
 
         att_scores = self.attention(K, queries_rep, self.A1, trainKM, positional=positional)  # , self.TA, self.TA2)
-
+        # probs over keys
         att_probs = masked_log_softmax(att_scores, trainPM)
+        probs_out, idx_out = torch.max(att_probs, 1)
+        # get ids for values
+        val_idx = trainV[range(self.batch_size), idx_out]
+        # initialize y to very small number (log space)
+        y = Variable(torch.full((self.batch_size, self.output_size), -100.), requires_grad=False).type(float_tensor_type)
+        y[range(self.batch_size), val_idx] = probs_out
 
-        return att_probs
+        return y, val_idx, att_probs
 
     def attention(self, trainK, u_k_1, A_k, KM, positional=True):  # , temp_A_k, temp_C_k):
         mem_emb_A = self.embed_story(trainK, A_k, KM, positional=positional)  # B*S*d

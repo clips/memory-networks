@@ -342,7 +342,7 @@ def main():
                             help="anneal every [anneal-epoch] epoch, default: 25")
     arg_parser.add_argument("--anneal-factor", type=int, default=2,
                             help="factor to anneal by every 'anneal-epoch(s)', default: 2")
-    arg_parser.add_argument("--average_embs", type=int, default=1, help="Flag to average context embs instead of summing.")
+    arg_parser.add_argument("--average-embs", type=int, default=1, help="Flag to average context embs instead of summing.")
     arg_parser.add_argument("--batch-size", type=int, default=32, help="batch size for training, default: 32")
     arg_parser.add_argument("--cuda", type=int, default=0, help="train on GPU, default: 0")
     arg_parser.add_argument("--data-dir", type=str, default="./data/tasks_1-20_v1-2/en",
