@@ -1,3 +1,6 @@
+from collections import defaultdict
+
+import numpy as np
 import torch
 from torch import nn
 from torch.autograd import Variable
@@ -380,7 +383,7 @@ class KVAtt(torch.nn.Module):
 
         self.cos = nn.CosineSimilarity(dim=2)
 
-    def forward(self, trainK, trainV, trainQ, trainVM, trainPM, trainKM, trainQM, inspect, positional=True):
+    def forward(self, trainK, trainV, trainQ, trainVM, trainPM, trainKM, trainQM, inspect, positional=True, attention_sum=False):
         """
         :param trainVM: a B*V tensor masking all predictions which are not words/entities in the relevant document
         """
@@ -404,14 +407,35 @@ class KVAtt(torch.nn.Module):
         att_scores = self.attention(K, queries_rep, self.A1, trainKM, positional=positional)  # , self.TA, self.TA2)
         # probs over keys
         att_probs = masked_log_softmax(att_scores, trainPM)
-        probs_out, idx_out = torch.max(att_probs, 1)
-        # get ids for values
-        val_idx = trainV[range(self.batch_size), idx_out]
+        if attention_sum:
+            probs_out, val_idx = self.max_of_attention_sum(trainV, att_probs)
+        else:
+            probs_out, idx_out = torch.max(att_probs, 1)
+            # get ids for values
+            val_idx = trainV[range(self.batch_size), idx_out]
         # initialize y to very small number (log space)
         y = Variable(torch.full((self.batch_size, self.output_size), -100.), requires_grad=False).type(float_tensor_type)
         y[range(self.batch_size), val_idx] = probs_out
 
         return y, val_idx, att_probs
+
+    def max_of_attention_sum(self, trainV, att_probs):
+        probs_out = []
+        idx_out = []
+        i_len, j_len = trainV.shape
+        for i in range(i_len):
+            d = defaultdict(float)
+            for j in range(j_len):
+                ent_idx = trainV[i,j]
+                if ent_idx == 0:
+                    continue
+                d[ent_idx] += torch.exp(att_probs[i,j])
+            max_ent, max_prob = sorted(d.items(), key=lambda x:x[1], reverse=True)[0]
+            probs_out.append(torch.log(max_prob))
+            idx_out.append(max_ent)
+
+        return float_tensor_type(probs_out), long_tensor_type(idx_out)
+
 
     def attention(self, trainK, u_k_1, A_k, KM, positional=True):  # , temp_A_k, temp_C_k):
         mem_emb_A = self.embed_story(trainK, A_k, KM, positional=positional)  # B*S*d
