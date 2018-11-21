@@ -53,7 +53,8 @@ def process_data_clicr(args, log):
         (
             [
                 ['passage_w1', 'passage_w2', ...], 
-                ['passage_w1', 'passage_w2', ...]
+                ['passage_w1', 'passage_w2', ...],
+                ...
             ], 
             ['q_w1', 'q_w2', ...], 
             ['answer'],
@@ -86,10 +87,10 @@ def process_data_clicr_kv(args, log):
     clicr data is of the form:
     [
         (
-            [
-                ['passage_w1', 'passage_w2', ...], 
-                ['passage_w1', 'passage_w2', ...]
-            ], 
+            (
+                [['k1', 'k2', ...], ...] 
+                [['v1', 'v2', ...], ...]
+            ), 
             ['q_w1', 'q_w2', ...], 
             ['answer'],
             [
@@ -113,6 +114,22 @@ def process_data_clicr_kv(args, log):
         log.info("Output Size: {}".format(output_size))
 
     return data, val_data, test_data, k_size, v_size, vocab_size, memory_size, word_idx, output_size, output_idx
+
+
+def process_data_kv(args, log):
+    data, test_data, vocab = load_data_kv(args.data_dir, args.joint_training, args.task_number, args.win_size_kv)
+
+    '''
+    
+    '''
+    memory_size, k_size, v_size, vocab_size, word_idx = calculate_parameter_values_kv(
+        data=data, debug=args.debug,
+        memory_size=args.memory_size,
+        vocab=vocab, log=log)
+    if args.debug:
+        log.info("Vocabulary Size: {}".format(vocab_size))
+
+    return data, test_data, k_size, v_size, vocab_size, memory_size, word_idx
 
 
 def load_clicr_kv(fn, ent_setup="ent", win_size=3, remove_notfound=True, max_n_load=None):
@@ -232,6 +249,27 @@ def prepare_q_for_kv(q, win_size=3):
     assert contexts
 
     return contexts
+
+
+def prepare_kv_babi(text, win_size=3):
+    """
+    [["w1", "w2", ...],
+    ["w9", "w10", ...]]
+    """
+    values = []
+    keys = []  # n_words*(2*win_size)
+    for sent in text:
+        for c, w in enumerate(sent):
+            left = sent[max(0, c-win_size):c]
+            right = sent[c+1:c+1+win_size]
+            contexts = left + right
+            if not contexts:
+                continue
+            keys.append(contexts)
+            values.append(w)
+    assert len(values) > 0
+
+    return keys, values
 
 
 def prepare_kv(text, win_size=3):
@@ -675,7 +713,36 @@ def load_data(data_dir, joint_training, task_number):
     return train_data, test_data, vocab
 
 
-def load_task(data_dir, task_id, only_supporting=False):
+def load_data_kv(data_dir, joint_training, task_number, win_size):
+    if (joint_training == 0):
+        start_task = task_number
+        end_task = task_number
+    else:
+        start_task = 1
+        end_task = 20
+
+    train_data = []
+    test_data = []
+
+    while start_task <= end_task:
+        task_train, task_test = load_task(data_dir, start_task, kv=True, win_size=win_size)
+        train_data += task_train
+        test_data += task_test
+        start_task += 1
+
+    data = train_data + test_data
+
+    #vocab = sorted(reduce(lambda x, y: x | y, (set(list(chain.from_iterable(s)) + q + a) for (k, v), q, a in data)))
+    vocab_set = set()
+    for (k, v), q, a in data:
+        vocab_set.update([w for sent in k for w in sent] + v + q + a)
+
+    vocab = sorted(vocab_set)
+
+    return train_data, test_data, vocab
+
+
+def load_task(data_dir, task_id, only_supporting=False, kv=False, win_size=3):
     '''
     Load the nth task. There are 20 tasks in total.
 
@@ -688,21 +755,21 @@ def load_task(data_dir, task_id, only_supporting=False):
     s = 'qa{}_'.format(task_id)
     train_file = [f for f in files if s in f and 'train' in f][0]
     test_file = [f for f in files if s in f and 'test' in f][0]
-    train_data = get_stories(train_file, only_supporting)
-    test_data = get_stories(test_file, only_supporting)
+    train_data = get_stories(train_file, only_supporting, kv=kv, win_size=win_size)
+    test_data = get_stories(test_file, only_supporting, kv=kv, win_size=win_size)
     return train_data, test_data
 
 
-def get_stories(f, only_supporting=False):
+def get_stories(f, only_supporting=False, kv=False, win_size=3):
     '''
     Given a file name, read the file, retrieve the stories, and then convert the sentences into a single story.
     If max_length is supplied, any stories longer than max_length tokens will be discarded.
     '''
     with open(f) as f:
-        return parse_stories(f.readlines(), only_supporting=only_supporting)
+        return parse_stories(f.readlines(), only_supporting=only_supporting, kv=kv, win_size=win_size)
 
 
-def parse_stories(lines, only_supporting=False):
+def parse_stories(lines, only_supporting=False, kv=False, win_size=3):
     '''
     Parse stories provided in the bAbI tasks format
     If only_supporting is true, only the sentences that support the answer are kept.
@@ -730,10 +797,16 @@ def parse_stories(lines, only_supporting=False):
             if only_supporting:
                 # Only select the related substory
                 supporting = map(int, supporting.split(''))
-                substory = [story[i - 1] for i in supporting]
+                if kv:
+                    raise NotImplementedError
+                else:
+                    substory = [story[i - 1] for i in supporting]
             else:
                 # Provide all the substories
-                substory = [x for x in story if x]
+                if kv:
+                    substory = prepare_kv_babi(story, win_size=win_size)
+                else:
+                    substory = [x for x in story if x]
 
             data.append((substory, q, a))
             story.append('')
@@ -770,6 +843,23 @@ def calculate_parameter_values(data, debug, memory_size, vocab, log):
         log.info("Average story length: {}".format(mean_story_size))
         log.info("Average memory size: {}".format(memory_size))
     return memory_size, sentence_size, vocab_size, word_idx
+
+
+def calculate_parameter_values_kv(data, debug, memory_size, vocab, log):
+    word_idx = dict((c, i + 1) for i, c in enumerate(vocab))
+    max_story_size = max(map(len, (k for (k,v), _, _ in data)))
+    mean_story_size = int(np.mean(list(map(len, (k for (k,v), _, _ in data)))))
+    k_size = max(map(len, chain.from_iterable(k for (k,v), _, _ in data)))
+    v_size = None
+    memory_size = min(memory_size, max_story_size)
+    vocab_size = len(word_idx) + 1  # +1 for nil word
+    if debug:
+        log.info("Longest key length: {}".format(k_size))
+        log.info("Longest value length: {}".format(v_size))
+        log.info("Longest story length: {}".format(max_story_size))
+        log.info("Average story length: {}".format(mean_story_size))
+        log.info("Average memory size: {}".format(memory_size))
+    return memory_size, k_size, v_size, vocab_size, word_idx
 
 
 def calculate_parameter_values_clicr(data, debug, memory_size, vocab, log):
@@ -1125,6 +1215,93 @@ def vectorize_data_clicr_kvatt(data, word_idx, output_size, output_idx, k_size, 
     inv_w_idx = {v: k for k, v in word_idx.items()}
 
     for (k,v), query, answer, _, _, _ in data:
+        lq = max(0, k_size - len(query))
+        q = [word_idx[w] for w in query] + [0] * lq
+
+        ks = []
+        for win in k:
+            ls = max(0, k_size - len(win))
+            sent = [word_idx[w] for w in win] + [0] * ls
+            if len(sent) > k_size:  # can happen in test/val as sentence_size is calculated on train
+                sent = sent[:k_size]
+            ks.append(sent)
+
+        vs = [output_idx[val] for val in v]
+
+        assert len(ks) == len(vs)
+        if len(ks) > memory_size:
+            # TODO this is currently problematic as it relies on simple word match
+            # Use Jaccard similarity to determine the most relevant sentences
+            q_words = (q)
+            least_like_q = sorted(ks, key=functools.cmp_to_key(
+                lambda x, y: jaccard_similarity_score((x), q_words) < jaccard_similarity_score((y), q_words)))[
+                           :len(ks) - memory_size]
+            for sent in least_like_q:
+                # Remove the first occurrence of sent. A list comprehension as in [sent for sent in ss if sent not in least_like_q]
+                # should not be used, as it would remove multiple occurrences of the same sentence, some of which might actually make the cutoff.
+                del_id = ks.index(sent)
+                del ks[del_id]
+                del vs[del_id]
+            p_m = [1.] * memory_size
+        else:
+            # pad to memory_size
+            lm = max(0, memory_size - len(ks))
+            p_m = [1.] * len(ks) + [0.] * lm
+            for _ in range(lm):
+                ks.append([0] * k_size)
+                vs.append(0)
+        y = np.zeros(output_size)
+        for a in answer:
+            y[output_idx[a]] = 1
+            #y[word_idx[a]] = 1
+
+        vm = np.zeros_like(y)
+        # mask for all words in vocab not in the set of entities present in the values:
+        vs_voc = set(np.array(vs).flatten())
+        vm[list(vs_voc)] = 1.
+
+        K.append(ks)
+        V.append(vs)
+        Q.append(q)
+        A.append(y)
+        VM.append(vm)
+        PM.append(p_m)
+        KM = np.clip(np.array(K), 0., 1.)
+        QM.append(np.clip(np.array(q), 0., 1.))
+
+    return np.array(K), np.array(V), np.array(Q), np.array(A), np.array(VM), np.array(PM), np.array(KM), np.array(QM)
+
+
+def vectorize_data_kvatt(data, word_idx, output_size, output_idx, k_size, memory_size):
+    '''
+    Vectorize stories (into keys and values) and queries. Unlike in vectorization for KVMemNNs, we
+    use here the output_idx for encoding the values, since we need values in prediction and for comparison
+    to gold answers (which also use output_idx).
+
+    If a key/value length < key/value_size, it will be padded with 0's.
+
+    If a story length < memory_size, the story will be padded with empty memories.
+    Empty memories are 1-D arrays of length sentence_size filled with 0's.
+
+    The answer array is returned as a one-hot encoding.
+
+    vocab_mask marks which elements (=words/entities) in V are found in the particular document
+
+    We also keep track of lengths of passages (=keys), keys, values and queries, so that we can mask during
+    vectorization the padded parts and ignore them in computation
+
+    '''
+    K = []
+    V = []
+    Q = []
+    A = []
+    VM = []  # vocabulary mask
+    PM = []  # passage mask
+    KM = []  # keys mask
+    QM = []  # query mask
+    inv_w_idx = {v: k for k, v in word_idx.items()}
+
+    for (k,v), query, answer in data:
         lq = max(0, k_size - len(query))
         q = [word_idx[w] for w in query] + [0] * lq
 
