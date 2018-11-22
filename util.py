@@ -1511,20 +1511,45 @@ def load_w2v(fn):
 
 
 def update_vectors(pretr_embs, pretr_emb_idx, embs, word_idx):
-    c = 0
+    """
+    Use the pretrained entity embeddings if it exists. If not, average the word embeddings in an entity.
+    """
+    c_all = 0
+    c_ent = 0
+    c_avg = 0
+    c_unk = 0
+    c_single = 0
     for w, i in word_idx.items():
         if w.startswith("@entity"):
-            w_l = deentitize(w).split(" ")
-            w_idx = [pretr_emb_idx[w] for w in w_l if w in pretr_emb_idx]
-            if not w_idx:
-                continue
-            embs[i] = np.average(pretr_embs[w_idx], axis=0)
-            c+=1
+            if w.replace("@entity", "@ent_") in pretr_emb_idx:
+                embs[i] = pretr_embs[pretr_emb_idx[w.replace("@entity", "@ent_")]]
+                c_ent += 1
+            elif len(w.split("_")) > 1: # > 1 word
+                reduced = "@ent_" + "_".join(w.split("_")[1:])
+                if reduced in pretr_emb_idx:
+                    embs[i] = pretr_embs[pretr_emb_idx[reduced]]
+                    c_ent += 1
+            else:
+                w_l = deentitize(w).split(" ")
+                w_idx = []
+                for w in w_l:
+                    if "@ent_"+w in pretr_emb_idx:
+                        w_idx.append(pretr_emb_idx["@ent_"+w])
+                    elif w in pretr_emb_idx:
+                        w_idx.append(pretr_emb_idx[w])
+                if not w_idx:
+                    c_unk += 1
+                    continue
+                embs[i] = np.average(pretr_embs[w_idx], axis=0)
+                c_avg += 1
         else:
             if w not in pretr_emb_idx:
+                c_unk += 1
                 continue
             embs[i] = pretr_embs[pretr_emb_idx[w]]
-    print("Updated {} entity vectors".format(c))
+            c_single += 1
+        c_all += 1
+    print("Pretrained embeddings: {} all, {} ent, {} avg, {} unk, {} single".format(c_all, c_ent, c_avg, c_unk, c_single))
     return embs
 
 

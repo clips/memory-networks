@@ -19,6 +19,7 @@ class N2N(torch.nn.Module):
         self.story_size = story_size
         self.hops = hops
         self.pretrained_word_embed = args.pretrained_word_embed
+        self.pretrained_output_layer = args.pretrained_output_layer
         self.freeze_pretrained_word_embed = args.freeze_pretrained_word_embed
         self.word_idx = word_idx
         self.args = args
@@ -100,7 +101,7 @@ class N2N(torch.nn.Module):
         #self.lin_bn = nn.BatchNorm1d(4*embed_size)
         self.cos = nn.CosineSimilarity(dim=2)
         #self.lin = nn.Linear(embed_size*4, embed_size)
-        self.lin_final = nn.Linear(embed_size*4, output_size)
+        self.lin_final = nn.Linear(embed_size, output_size)
         #self.lin_final = nn.Linear(embed_size, output_size)
         #self.lin_final = nn.Linear(embed_size, vocab_size)
         #self.lin_final.weight = nn.Parameter(self.A1.weight)
@@ -344,7 +345,8 @@ class KVN2N(N2N):
 
         #u_k = torch.squeeze(o) #+ torch.squeeze(u_k_1)
 
-        hop_o = torch.cat((o, u_k_1, o + u_k_1, o * u_k_1), dim=1)  # B*4d
+        #hop_o = torch.cat((o, u_k_1, o + u_k_1, o * u_k_1), dim=1)  # B*4d
+        hop_o = o  # B*d
         if inspect:
             return hop_o, probabs
         else:

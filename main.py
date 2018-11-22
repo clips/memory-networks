@@ -367,6 +367,8 @@ def main():
     arg_parser.add_argument("--max-n-load", type=int, help="maximum number of clicr documents to use, for debugging")
     arg_parser.add_argument("--memory-size", type=int, default=50, help="upper limit on memory size, default: 50")
     arg_parser.add_argument("--mode", type=str, default="standard", help="standard | kv")
+    arg_parser.add_argument("--pretrained-output-layer", type=str,
+                            help="path to the txt file with concept embeddings to use at the output layer")  # "/mnt/b5320167-5dbd-4498-bf34-173ac5338c8d/Datasets/clinical_embs/pubmed_mimic_clicr/pub_mim_cli.embeddings"
     arg_parser.add_argument("--pretrained-word-embed", type=str,
                             help="path to the txt file with word embeddings")  # "/nas/corpora/accumulate/clicr/embeddings/4bfb98c2-688e-11e7-aa74-901b0e5592c8/embeddings"
     arg_parser.add_argument("--save-model", action="store_true")
