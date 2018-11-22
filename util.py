@@ -1512,7 +1512,7 @@ def load_w2v(fn):
 
 def update_vectors(pretr_embs, pretr_emb_idx, embs, word_idx):
     """
-    Use the pretrained entity embeddings if it exists. If not, average the word embeddings in an entity.
+    Use the pretrained entity embedding if it exists. If not, average the word embeddings in an entity.
     """
     c_all = 0
     c_ent = 0
@@ -1561,6 +1561,16 @@ def load_emb(fn, word_idx, freeze=False, ent_setup="ent"):
     embs_tensor = nn.Embedding.from_pretrained(float_tensor_type(embs), freeze=freeze)
 
     return embs_tensor, n
+
+
+def load_output_emb(fn, output_idx):
+    pretr_embs, pretr_emb_idx, n = load_w2v(fn)
+    # build rep. for entities by averaging word vectors
+    embs = np.random.normal(size=(len(output_idx), n), loc=0, scale=0.1)
+    embs = update_vectors(pretr_embs, pretr_emb_idx, embs, output_idx)
+    layer_weights = nn.Parameter(float_tensor_type(embs))
+
+    return layer_weights, n
 
 
 def evaluate_clicr(test_file, preds_file, extended=False,

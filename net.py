@@ -6,12 +6,12 @@ from torch import nn
 from torch.autograd import Variable
 from torch.nn import functional as F
 
-from net_util import masked_log_softmax, masked_softmax, masked_softmin
-from util import get_position_encoding, long_tensor_type, load_emb, float_tensor_type
+from net_util import masked_log_softmax, masked_softmax
+from util import get_position_encoding, long_tensor_type, load_emb, float_tensor_type, load_output_emb
 
 
 class N2N(torch.nn.Module):
-    def __init__(self, batch_size, embed_size, vocab_size, hops, story_size, args, word_idx, output_size):
+    def __init__(self, batch_size, embed_size, vocab_size, hops, story_size, args, word_idx, output_size, output_idx):
         super(N2N, self).__init__()
 
         self.embed_size = embed_size
@@ -22,6 +22,7 @@ class N2N(torch.nn.Module):
         self.pretrained_output_layer = args.pretrained_output_layer
         self.freeze_pretrained_word_embed = args.freeze_pretrained_word_embed
         self.word_idx = word_idx
+        self.output_idx = output_idx
         self.args = args
 
         if self.hops <= 0:
@@ -102,6 +103,8 @@ class N2N(torch.nn.Module):
         self.cos = nn.CosineSimilarity(dim=2)
         #self.lin = nn.Linear(embed_size*4, embed_size)
         self.lin_final = nn.Linear(embed_size, output_size)
+        if self.pretrained_output_layer:
+            self.lin_final.weight, _ = load_output_emb(args.pretrained_output_layer, self.output_idx)
         #self.lin_final = nn.Linear(embed_size, output_size)
         #self.lin_final = nn.Linear(embed_size, vocab_size)
         #self.lin_final.weight = nn.Parameter(self.A1.weight)
@@ -346,7 +349,7 @@ class KVN2N(N2N):
         #u_k = torch.squeeze(o) #+ torch.squeeze(u_k_1)
 
         #hop_o = torch.cat((o, u_k_1, o + u_k_1, o * u_k_1), dim=1)  # B*4d
-        hop_o = o  # B*d
+        hop_o = o + u_k_1  # B*d
         if inspect:
             return hop_o, probabs
         else:
