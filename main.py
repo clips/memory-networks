@@ -65,7 +65,7 @@ def train_network(train_batches_id, val_batches_id, test_batches_id, data, val_d
         current_correct = 0
         for batch, (s_batch, _) in zip(train_batch_gen, train_batches_id):
             if args.mode == "kv":
-                idx_out, idx_true, out, att_probs = epoch_kv(batch, net, args.inspect, positional)
+                idx_out, idx_true, out, att_probs, idx_att_true = epoch_kv(batch, net, args.inspect, positional, word_idx, output_idx)
             else:
                 idx_out, idx_true, out, att_probs = epoch(batch, net, args.inspect)
 
@@ -77,7 +77,11 @@ def train_network(train_batches_id, val_batches_id, test_batches_id, data, val_d
                 else:
                     inspect(out, idx_true, os.path.dirname(save_model_path), current_epoch, s_batch, att_probs, inv_output_idx, data, args, log)
                 n_inspect += 1
-            loss = criterion(out, idx_true)
+            if current_epoch < 2:
+                loss = criterion(att_probs, idx_att_true)  # attention supervision
+            else:
+                loss = criterion(out, idx_true)  # downstream
+            # loss = loss1 + loss2
             loss.backward()
             clip_grad_norm_(net.parameters(), 40)
             running_loss += loss
@@ -135,7 +139,7 @@ def epoch(batch, net, inspect=False):
     return idx_out, idx_true, out, att_probs if inspect else None
 
 
-def epoch_kv(batch, net, inspect=False, positional=True):
+def epoch_kv(batch, net, inspect=False, positional=True, word_idx=None, output_idx=None):
     key_batch = batch[0]
     value_batch = batch[1]
     query_batch = batch[2]
@@ -144,10 +148,18 @@ def epoch_kv(batch, net, inspect=False, positional=True):
     pasmask_batch = batch[5]
     keymask_batch = batch[6]
     querymask_batch = batch[7]
+    attanswer_batch = batch[8]
 
     A = Variable(torch.stack(answer_batch, dim=0), requires_grad=False).type(long_tensor_type)
     _, idx_true = torch.max(A, 1)
     idx_true = torch.squeeze(idx_true)
+
+    # attention supervision
+    # note that attanswer_batch contains marks for all true-answer occurrences among the values;
+    # here, we only consider the first (=max) true-answer occurrence in the memory
+    AA = Variable(torch.stack(attanswer_batch, dim=0), requires_grad=False).type(long_tensor_type)
+    _, idx_att_true = torch.max(AA, 1)
+    idx_att_true = torch.squeeze(idx_att_true)
 
     K = torch.stack(key_batch, dim=0)
     V = torch.stack(value_batch, dim=0)
@@ -163,7 +175,7 @@ def epoch_kv(batch, net, inspect=False, positional=True):
         out = net(K, V, Q, VM, PM, KM, QM, inspect, positional=positional)
 
     _, idx_out = torch.max(out, 1)
-    return idx_out, idx_true, out, att_probs if inspect else None
+    return idx_out, idx_true, out, att_probs if inspect else None, idx_att_true
 
 
 def update_counts(current_correct, current_len, idx_out, idx_true):
@@ -194,7 +206,7 @@ def calculate_loss_and_accuracy_kv(net, batches_id, data, word_idx, sentence_siz
     current_len = 0
     current_correct = 0
     for batch in batch_gen:
-        idx_out, idx_true, out, _ = epoch_kv(batch, net, inspect, positional)
+        idx_out, idx_true, out, _, idx_att_true = epoch_kv(batch, net, inspect, positional, word_idx, output_idx)
         current_correct, current_len = update_counts(current_correct, current_len, idx_out, idx_true)
     return 100 * (current_correct / current_len), current_correct, current_len
 
@@ -236,7 +248,7 @@ def eval_network(vocab_size, story_size, sentence_size, model, word_idx, output_
 
     for batch, (s_batch, _) in zip(test_batch_gen, test_batches_id):
         if args.mode == "kv":
-            idx_out, idx_true, out, att_probs = epoch_kv(batch, net, args.inspect, positional)
+            idx_out, idx_true, out, att_probs, idx_att_true = epoch_kv(batch, net, args.inspect, positional, word_idx, output_idx)
         else:
             idx_out, idx_true, out, att_probs = epoch(batch, net, args.inspect)
         if args.inspect and n_inspect < max_inspect:

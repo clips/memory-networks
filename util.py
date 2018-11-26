@@ -1124,6 +1124,7 @@ def vectorize_data_clicr_kv(data, word_idx, output_size, output_idx, k_size, mem
     PM = []  # passage mask
     KM = []  # keys mask
     QM = []  # query mask
+    AA = []  # for att supervision
     inv_w_idx = {v: k for k, v in word_idx.items()}
 
     for (k,v), query, answer, _, _, _ in data:
@@ -1167,6 +1168,15 @@ def vectorize_data_clicr_kv(data, word_idx, output_size, output_idx, k_size, mem
             y[output_idx[a]] = 1
             #y[word_idx[a]] = 1
 
+        # att supervision
+        assert len(answer) == 1
+        y_att = np.zeros(memory_size)
+        for c, v in enumerate(vs):
+            if v == 0:
+                continue
+            if inv_w_idx[v] == answer[0]:
+                y_att[c] = 1
+
         vm = np.zeros_like(y)
         # mask for all words in vocab not in the set of entities present in the values:
         # TODO this doesn't work for the no-ent setting
@@ -1181,8 +1191,9 @@ def vectorize_data_clicr_kv(data, word_idx, output_size, output_idx, k_size, mem
         PM.append(p_m)
         KM = np.clip(np.array(K), 0., 1.)
         QM.append(np.clip(np.array(q), 0., 1.))
+        AA.append(y_att)
 
-    return np.array(K), np.array(V), np.array(Q), np.array(A), np.array(VM), np.array(PM), np.array(KM), np.array(QM)
+    return np.array(K), np.array(V), np.array(Q), np.array(A), np.array(VM), np.array(PM), np.array(KM), np.array(QM), np.array(AA)
 
 
 def vectorize_data_clicr_kvatt(data, word_idx, output_size, output_idx, k_size, memory_size):
@@ -1397,8 +1408,8 @@ def vectorized_batches_kv(batches, data, word_idx, k_size, memory_size, output_s
     if shuffle:
         np.random.shuffle(batches)
     for s_batch, e_batch in batches:
-        dataK, dataV, dataQ, dataA, dataVM, dataPM, dataKM, dataQM = vectorizer(data[s_batch:e_batch], word_idx, output_size, output_idx, k_size, memory_size)
-        dataA, dataQ, dataK, dataV, dataVM, dataPM, dataKM, dataQM = extract_tensors_kv(dataA, dataQ, dataK, dataV, dataVM, dataPM, dataKM, dataQM)
+        dataK, dataV, dataQ, dataA, dataVM, dataPM, dataKM, dataQM, dataAA = vectorizer(data[s_batch:e_batch], word_idx, output_size, output_idx, k_size, memory_size)
+        dataA, dataQ, dataK, dataV, dataVM, dataPM, dataKM, dataQM, dataAA = extract_tensors_kv(dataA, dataQ, dataK, dataV, dataVM, dataPM, dataKM, dataQM, dataAA)
 
         yield [list(dataK),
                list(dataV),
@@ -1407,7 +1418,8 @@ def vectorized_batches_kv(batches, data, word_idx, k_size, memory_size, output_s
                list(dataVM) if dataVM is not None else None,
                list(dataPM) if dataPM is not None else None,
                list(dataKM) if dataKM is not None else None,
-               list(dataQM) if dataQM is not None else None
+               list(dataQM) if dataQM is not None else None,
+               list(dataAA)
                ]
 
 
@@ -1423,7 +1435,7 @@ def extract_tensors(A, Q, S, VM, PM, SM, QM):
     return A, Q, S, VM, PM, SM, QM
 
 
-def extract_tensors_kv(A, Q, K, V, VM, PM, KM, QM):
+def extract_tensors_kv(A, Q, K, V, VM, PM, KM, QM, AA):
     A = torch.from_numpy(A).type(long_tensor_type)
     K = torch.from_numpy(K).type(long_tensor_type)
     V = torch.from_numpy(V).type(long_tensor_type)
@@ -1433,7 +1445,8 @@ def extract_tensors_kv(A, Q, K, V, VM, PM, KM, QM):
     PM = torch.from_numpy(PM).type(float_tensor_type) if PM is not None else None
     KM = torch.from_numpy(KM).type(float_tensor_type) if KM is not None else None
     QM = torch.from_numpy(QM).type(float_tensor_type) if QM is not None else None
-    return A, Q, K, V, VM, PM, KM, QM
+    AA = torch.from_numpy(AA).type(long_tensor_type)
+    return A, Q, K, V, VM, PM, KM, QM, AA
 
 
 def construct_s_q_a_batch(batches, batched_objects, S, Q, A):

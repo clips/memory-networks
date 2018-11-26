@@ -338,7 +338,7 @@ class KVN2N(N2N):
         # zero out the masked (padded) sentence embeddings:
         #probabs = probabs * PM.unsqueeze(2).expand_as(probabs)
         probabs = self.cos(mem_emb_A_temp, queries_temp)  # B*S
-        probabs = masked_softmax(probabs, PM)  # B*S
+        probabs = masked_log_softmax(probabs, PM)  # B*S
         mem_emb_C_temp = mem_emb_C_temp.permute(0, 2, 1)   # B*d*S
         probabs_temp = probabs.unsqueeze(1).expand_as(mem_emb_C_temp)
 
