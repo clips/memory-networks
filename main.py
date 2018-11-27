@@ -77,11 +77,13 @@ def train_network(train_batches_id, val_batches_id, test_batches_id, data, val_d
                 else:
                     inspect(out, idx_true, os.path.dirname(save_model_path), current_epoch, s_batch, att_probs, inv_output_idx, data, args, log)
                 n_inspect += 1
-            if current_epoch < 2:
-                loss = criterion(att_probs, idx_att_true)  # attention supervision
-            else:
-                loss = criterion(out, idx_true)  # downstream
-            # loss = loss1 + loss2
+            #if current_epoch < 2:
+            #    loss = criterion(att_probs, idx_att_true)  # attention supervision
+            #else:
+            #    loss = criterion(out, idx_true)  # downstream
+            loss1 = criterion(out, idx_true)  # downstream
+            loss2 = criterion(att_probs, idx_att_true)  # attention supervision
+            loss = loss1 + loss2
             loss.backward()
             clip_grad_norm_(net.parameters(), 40)
             running_loss += loss

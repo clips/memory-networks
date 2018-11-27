@@ -338,12 +338,12 @@ class KVN2N(N2N):
         # zero out the masked (padded) sentence embeddings:
         #probabs = probabs * PM.unsqueeze(2).expand_as(probabs)
         probabs = self.cos(mem_emb_A_temp, queries_temp)  # B*S
-        probabs = masked_log_softmax(probabs, PM)  # B*S
+        probabs_log = masked_log_softmax(probabs, PM)  # B*S
+        probabs = torch.exp(probabs_log)
         mem_emb_C_temp = mem_emb_C_temp.permute(0, 2, 1)   # B*d*S
         probabs_temp = probabs.unsqueeze(1).expand_as(mem_emb_C_temp)
 
         pre_w = torch.mul(mem_emb_C_temp, probabs_temp)
-
         o = torch.sum(pre_w, dim=2)
 
         #u_k = torch.squeeze(o) #+ torch.squeeze(u_k_1)
@@ -351,7 +351,7 @@ class KVN2N(N2N):
         #hop_o = torch.cat((o, u_k_1, o + u_k_1, o * u_k_1), dim=1)  # B*4d
         hop_o = o + u_k_1  # B*d
         if inspect:
-            return hop_o, probabs
+            return hop_o, probabs_log
         else:
             return hop_o
 
