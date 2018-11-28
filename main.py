@@ -63,6 +63,8 @@ def train_network(train_batches_id, val_batches_id, test_batches_id, data, val_d
                                                  output_size, output_idx, vectorizer, shuffle=args.shuffle)
         current_len = 0
         current_correct = 0
+        current_att_len = 0
+        current_att_correct = 0
         for batch, (s_batch, _) in zip(train_batch_gen, train_batches_id):
             if args.mode == "kv":
                 idx_out, idx_true, out, att_probs, idx_att_true = epoch_kv(batch, net, args.inspect, positional, word_idx, output_idx)
@@ -77,31 +79,34 @@ def train_network(train_batches_id, val_batches_id, test_batches_id, data, val_d
                 else:
                     inspect(out, idx_true, os.path.dirname(save_model_path), current_epoch, s_batch, att_probs, inv_output_idx, data, args, log)
                 n_inspect += 1
-            #if current_epoch < 2:
-            #    loss = criterion(att_probs, idx_att_true)  # attention supervision
-            #else:
-            #    loss = criterion(out, idx_true)  # downstream
-            loss1 = criterion(out, idx_true)  # downstream
-            loss2 = criterion(att_probs, idx_att_true)  # attention supervision
-            loss = loss1 + loss2
+            if current_epoch < 10:
+                loss = criterion(att_probs, idx_att_true)  # attention supervision
+            else:
+                loss = criterion(out, idx_true)  # downstream
+            #loss1 = criterion(out, idx_true)  # downstream
+            #loss2 = criterion(att_probs, idx_att_true)  # attention supervision
+            #loss = loss1 + loss2
             loss.backward()
             clip_grad_norm_(net.parameters(), 40)
             running_loss += loss
             current_correct, current_len = update_counts(current_correct, current_len, idx_out, idx_true)
+            _, att_out = att_probs.max(dim=1)
+            current_att_correct, current_att_len = update_counts(current_att_correct, current_att_len, att_out, idx_att_true)
             optimizer.step()
             optimizer.zero_grad()
         if current_epoch % args.log_epochs == 0:
             accuracy = 100 * (current_correct / current_len)
+            accuracy_att = 100 * (current_att_correct / current_att_len)
             if args.mode == "kv":
-                val_acc, val_cor, val_tot = calculate_loss_and_accuracy_kv(net, val_batches_id, val_data, word_idx, sentence_size, story_size,
+                val_acc, val_cor, val_tot, val_att_acc, val_att_cor, val_att_tot = calculate_loss_and_accuracy_kv(net, val_batches_id, val_data, word_idx, sentence_size, story_size,
                                                                     output_size, output_idx, vectorizer, args.inspect, positional)
             else:
                 val_acc, val_cor, val_tot = calculate_loss_and_accuracy(net, val_batches_id, val_data, word_idx,
                                                                     sentence_size, story_size,
                                                                     output_size, output_idx, vectorizer, args.inspect)
-            log.info("Epochs: {}, Train Accuracy: {:.3f}, Loss: {:.3f}, Val_Acc:{:.3f} ({}/{})".format(current_epoch, accuracy,
+            log.info("Epochs: {}, Train Accuracy: {:.3f}, Loss: {:.3f}, Val_Acc:{:.3f}, Train Att. Accuracy:{:.3f}, Val_Att_Acc:{:.3f} ({}/{})".format(current_epoch, accuracy,
                                                                                 running_loss.item(),
-                                                                                val_acc, val_cor, val_tot))
+                                                                                val_acc, accuracy_att, val_att_acc, val_cor, val_tot))
             if best_val_acc_yet <= val_acc and args.save_model:
                 torch.save(net.state_dict(), save_model_path)
                 best_val_acc_yet = val_acc
@@ -186,7 +191,6 @@ def update_counts(current_correct, current_len, idx_out, idx_true):
     current_correct += correct
     return current_correct, current_len
 
-
 def count_predictions(labels, predicted):
     batch_len = len(labels)
     correct = float((predicted == labels).sum())
@@ -207,10 +211,14 @@ def calculate_loss_and_accuracy_kv(net, batches_id, data, word_idx, sentence_siz
     batch_gen = vectorized_batches_kv(batches_id, data, word_idx, sentence_size, story_size, output_size, output_idx, vectorizer)
     current_len = 0
     current_correct = 0
+    current_att_len = 0
+    current_att_correct = 0
     for batch in batch_gen:
-        idx_out, idx_true, out, _, idx_att_true = epoch_kv(batch, net, inspect, positional, word_idx, output_idx)
+        idx_out, idx_true, out, att_probs, idx_att_true = epoch_kv(batch, net, inspect, positional, word_idx, output_idx)
         current_correct, current_len = update_counts(current_correct, current_len, idx_out, idx_true)
-    return 100 * (current_correct / current_len), current_correct, current_len
+        _, att_out = att_probs.max(dim=1)
+        current_att_correct, current_att_len = update_counts(current_att_correct, current_att_len, att_out, idx_att_true)
+    return 100 * (current_correct / current_len), current_correct, current_len, 100 * (current_att_correct / current_att_len), current_att_correct, current_att_len
 
 
 def eval_network(vocab_size, story_size, sentence_size, model, word_idx, output_size, output_idx, test_batches_id, test, log, logdir, args, cuda=0., test_q_ids=None, max_inspect=5, ignore_missing_preds=False):

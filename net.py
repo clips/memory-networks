@@ -100,7 +100,11 @@ class N2N(torch.nn.Module):
         #self.lin = nn.Linear(embed_size, embed_size)
         #self.dropout = nn.Dropout(0.5)
         #self.lin_bn = nn.BatchNorm1d(4*embed_size)
-        self.cos = nn.CosineSimilarity(dim=2)
+
+
+        #self.cos = nn.CosineSimilarity(dim=2)
+        self.bil = nn.Bilinear(embed_size, embed_size, embed_size)
+
         #self.lin = nn.Linear(embed_size*4, embed_size)
         self.lin_final = nn.Linear(embed_size, output_size)
         if self.pretrained_output_layer:
@@ -158,8 +162,6 @@ class N2N(torch.nn.Module):
                 w_u = self.hop(S, w_u, self.A4, self.A4, trainPM, trainSM, inspect)  # , self.TA, self.TA4)
 
         # wx = torch.mm(w_u, self.W)
-
-
         #wx = self.lin_bn(wx)
         #wx = self.nonlin(wx)
 
@@ -337,7 +339,9 @@ class KVN2N(N2N):
         #probabs = mem_emb_A_temp * queries_temp
         # zero out the masked (padded) sentence embeddings:
         #probabs = probabs * PM.unsqueeze(2).expand_as(probabs)
-        probabs = self.cos(mem_emb_A_temp, queries_temp)  # B*S
+        #probabs = self.cos(mem_emb_A_temp, queries_temp)  # B*S
+        probabs = self.bil(mem_emb_A_temp, queries_temp)  # B*S*d
+        probabs = torch.sum(probabs, dim=2) # B*S
         probabs_log = masked_log_softmax(probabs, PM)  # B*S
         probabs = torch.exp(probabs_log)
         mem_emb_C_temp = mem_emb_C_temp.permute(0, 2, 1)   # B*d*S
@@ -351,7 +355,7 @@ class KVN2N(N2N):
         #hop_o = torch.cat((o, u_k_1, o + u_k_1, o * u_k_1), dim=1)  # B*4d
         hop_o = o + u_k_1  # B*d
         if inspect:
-            return hop_o, probabs_log
+            return hop_o, probabs
         else:
             return hop_o
 
@@ -387,6 +391,7 @@ class KVAtt(torch.nn.Module):
             self.A1.weight = nn.Parameter(torch.randn(vocab_size, embed_size).normal_(0, 0.1))
 
         self.cos = nn.CosineSimilarity(dim=2)
+
 
     def forward(self, trainK, trainV, trainQ, trainVM, trainPM, trainKM, trainQM, inspect, positional=True, attention_sum=False):
         """
