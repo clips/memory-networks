@@ -14,13 +14,13 @@ from logger import get_logger
 from net import N2N, KVN2N, KVAtt
 from util import long_tensor_type, vectorize_data_clicr, vectorized_batches, vectorize_data, evaluate_clicr, save_json, \
     get_q_ids_clicr, remove_missing_preds, deentitize, process_data_clicr_kv, vectorized_batches_kv, \
-    vectorize_data_clicr_kv
+    vectorize_data_clicr_kv, float_tensor_type
 from util import process_data, process_data_clicr
 
 
 
 def train_network(train_batches_id, val_batches_id, test_batches_id, data, val_data, test_data, word_idx, sentence_size,
-                  vocab_size, story_size, output_size, output_idx, save_model_path, args, log, max_inspect=15):
+                  vocab_size, story_size, output_size, output_idx, save_model_path, args, log, max_inspect=15, multi_att_supervision=True):
     if args.inspect:
         inv_output_idx = {v: k for k, v in output_idx.items()}
     if args.mode == "kv":
@@ -32,6 +32,10 @@ def train_network(train_batches_id, val_batches_id, test_batches_id, data, val_d
     if torch.cuda.is_available() and args.cuda == 1:
         net = net.cuda()
     #criterion = torch.nn.CrossEntropyLoss()
+    if multi_att_supervision:
+        criterion_att = torch.nn.BCELoss()
+    else:
+        criterion_att = torch.nn.NLLLoss()
     criterion = torch.nn.NLLLoss()
     #for name, param in net.named_parameters():
     #    if param.requires_grad:
@@ -63,11 +67,15 @@ def train_network(train_batches_id, val_batches_id, test_batches_id, data, val_d
                                                  output_size, output_idx, vectorizer, shuffle=args.shuffle)
         current_len = 0
         current_correct = 0
-        current_att_len = 0
-        current_att_correct = 0
+        if multi_att_supervision:
+            current_rprecision = []
+        else:
+            current_att_len = 0
+            current_att_correct = 0
+
         for batch, (s_batch, _) in zip(train_batch_gen, train_batches_id):
             if args.mode == "kv":
-                idx_out, idx_true, out, att_probs, idx_att_true = epoch_kv(batch, net, args.inspect, positional, word_idx, output_idx)
+                idx_out, idx_true, out, att_probs, idx_att_true = epoch_kv(batch, net, args.inspect, positional, multi_att_supervision)
             else:
                 idx_out, idx_true, out, att_probs = epoch(batch, net, args.inspect)
 
@@ -79,34 +87,43 @@ def train_network(train_batches_id, val_batches_id, test_batches_id, data, val_d
                 else:
                     inspect(out, idx_true, os.path.dirname(save_model_path), current_epoch, s_batch, att_probs, inv_output_idx, data, args, log)
                 n_inspect += 1
-            if current_epoch < 10:
-                loss = criterion(att_probs, idx_att_true)  # attention supervision
+            if current_epoch < args.epochs-2:
+                loss = criterion_att(att_probs, idx_att_true)  # attention supervision
             else:
+                if current_epoch == args.epochs-2:
+                    optimizer = torch.optim.Adam(net.parameters(), lr=args.lr)
+                    optimizer.zero_grad()
                 loss = criterion(out, idx_true)  # downstream
             #loss1 = criterion(out, idx_true)  # downstream
-            #loss2 = criterion(att_probs, idx_att_true)  # attention supervision
+            #loss2 = criterion_att(att_probs, idx_att_true)  # attention supervision
             #loss = loss1 + loss2
             loss.backward()
             clip_grad_norm_(net.parameters(), 40)
             running_loss += loss
             current_correct, current_len = update_counts(current_correct, current_len, idx_out, idx_true)
-            _, att_out = att_probs.max(dim=1)
-            current_att_correct, current_att_len = update_counts(current_att_correct, current_att_len, att_out, idx_att_true)
+            if multi_att_supervision:
+                current_rprecision = update_counts_multi_att(current_rprecision, att_probs, idx_att_true)
+            else:
+                _, att_out = att_probs.max(dim=1)
+                current_att_correct, current_att_len = update_counts(current_att_correct, current_att_len, att_out, idx_att_true)
             optimizer.step()
             optimizer.zero_grad()
         if current_epoch % args.log_epochs == 0:
             accuracy = 100 * (current_correct / current_len)
-            accuracy_att = 100 * (current_att_correct / current_att_len)
+            if multi_att_supervision:
+                perf_att = 100 * np.mean(current_rprecision)
+            else:
+                perf_att = 100 * (current_att_correct / current_att_len)
             if args.mode == "kv":
-                val_acc, val_cor, val_tot, val_att_acc, val_att_cor, val_att_tot = calculate_loss_and_accuracy_kv(net, val_batches_id, val_data, word_idx, sentence_size, story_size,
-                                                                    output_size, output_idx, vectorizer, args.inspect, positional)
+                val_acc, val_cor, val_tot, val_att_perf = calculate_loss_and_accuracy_kv(net, val_batches_id, val_data, word_idx, sentence_size, story_size,
+                                                                    output_size, output_idx, vectorizer, args.inspect, positional, multi_att_supervision)
             else:
                 val_acc, val_cor, val_tot = calculate_loss_and_accuracy(net, val_batches_id, val_data, word_idx,
                                                                     sentence_size, story_size,
                                                                     output_size, output_idx, vectorizer, args.inspect)
-            log.info("Epochs: {}, Train Accuracy: {:.3f}, Loss: {:.3f}, Val_Acc:{:.3f}, Train Att. Accuracy:{:.3f}, Val_Att_Acc:{:.3f} ({}/{})".format(current_epoch, accuracy,
+            log.info("Epochs: {}, Train Accuracy: {:.3f}, Loss: {:.3f}, Val_Acc:{:.3f}, Train Att. Perf:{:.3f}, Val_Att_Perf:{:.3f} ({}/{})".format(current_epoch, accuracy,
                                                                                 running_loss.item(),
-                                                                                val_acc, accuracy_att, val_att_acc, val_cor, val_tot))
+                                                                                val_acc, perf_att, val_att_perf, val_cor, val_tot))
             if best_val_acc_yet <= val_acc and args.save_model:
                 torch.save(net.state_dict(), save_model_path)
                 best_val_acc_yet = val_acc
@@ -146,7 +163,7 @@ def epoch(batch, net, inspect=False):
     return idx_out, idx_true, out, att_probs if inspect else None
 
 
-def epoch_kv(batch, net, inspect=False, positional=True, word_idx=None, output_idx=None):
+def epoch_kv(batch, net, inspect=False, positional=True, multi_att_supervision=False):
     key_batch = batch[0]
     value_batch = batch[1]
     query_batch = batch[2]
@@ -162,11 +179,14 @@ def epoch_kv(batch, net, inspect=False, positional=True, word_idx=None, output_i
     idx_true = torch.squeeze(idx_true)
 
     # attention supervision
-    # note that attanswer_batch contains marks for all true-answer occurrences among the values;
-    # here, we only consider the first (=max) true-answer occurrence in the memory
     AA = Variable(torch.stack(attanswer_batch, dim=0), requires_grad=False).type(long_tensor_type)
-    _, idx_att_true = torch.max(AA, 1)
-    idx_att_true = torch.squeeze(idx_att_true)
+    if multi_att_supervision:
+        idx_att_true = AA.type(float_tensor_type)
+    else:
+        # note that attanswer_batch contains marks for all true-answer occurrences among the values;
+        # here, we only consider the first (=max) true-answer occurrence in the memory
+        _, idx_att_true = torch.max(AA, 1)
+        idx_att_true = torch.squeeze(idx_att_true)
 
     K = torch.stack(key_batch, dim=0)
     V = torch.stack(value_batch, dim=0)
@@ -177,7 +197,7 @@ def epoch_kv(batch, net, inspect=False, positional=True, word_idx=None, output_i
     QM = torch.stack(querymask_batch, dim=0) if querymask_batch is not None else None
 
     if inspect:
-        out, att_probs = net(K, V, Q, VM, PM, KM, QM, inspect, positional=positional)
+        out, att_probs = net(K, V, Q, VM, PM, KM, QM, inspect, positional=positional, multi_att_supervision=multi_att_supervision)
     else:
         out = net(K, V, Q, VM, PM, KM, QM, inspect, positional=positional)
 
@@ -196,6 +216,22 @@ def count_predictions(labels, predicted):
     correct = float((predicted == labels).sum())
     return batch_len, correct
 
+def update_counts_multi_att(current_rprecision, att_probs, idx_att_true):
+    """
+    Calculate R-precision for each instance: R-precision = r / |Rel|,
+    where |Rel| is the number of 1s in idx_att_true, and r is the correctly chosen indices in top-|Rel| att_probs.
+
+    At the end we report the average of R-precision scores.
+    """
+    att_true_dist = [att_dist.nonzero()[0] for att_dist in idx_att_true.cpu().numpy()]
+    for i, dist in enumerate(att_true_dist):
+        top_k = len(dist)
+        if top_k == 0:  # exact answer not found in the text
+            continue
+        prob_idx = att_probs[0].topk(top_k)[1].cpu().numpy()
+        current_rprecision.append(len(set(dist) & set(prob_idx)) / top_k)
+
+    return current_rprecision
 
 def calculate_loss_and_accuracy(net, batches_id, data, word_idx, sentence_size, story_size, output_size, output_idx, vectorizer, inspect=False):
     batch_gen = vectorized_batches(batches_id, data, word_idx, sentence_size, story_size, output_size, output_idx, vectorizer)
@@ -207,21 +243,33 @@ def calculate_loss_and_accuracy(net, batches_id, data, word_idx, sentence_size, 
     return 100 * (current_correct / current_len), current_correct, current_len
 
 
-def calculate_loss_and_accuracy_kv(net, batches_id, data, word_idx, sentence_size, story_size, output_size, output_idx, vectorizer, inspect=False, positional=False):
+def calculate_loss_and_accuracy_kv(net, batches_id, data, word_idx, sentence_size, story_size, output_size, output_idx, vectorizer, inspect=False, positional=False, multi_att_supervision=False):
     batch_gen = vectorized_batches_kv(batches_id, data, word_idx, sentence_size, story_size, output_size, output_idx, vectorizer)
     current_len = 0
     current_correct = 0
-    current_att_len = 0
-    current_att_correct = 0
+    if multi_att_supervision:
+        current_rprecision = []
+    else:
+        current_att_len = 0
+        current_att_correct = 0
     for batch in batch_gen:
-        idx_out, idx_true, out, att_probs, idx_att_true = epoch_kv(batch, net, inspect, positional, word_idx, output_idx)
+        idx_out, idx_true, out, att_probs, idx_att_true = epoch_kv(batch, net, inspect, positional, multi_att_supervision)
         current_correct, current_len = update_counts(current_correct, current_len, idx_out, idx_true)
-        _, att_out = att_probs.max(dim=1)
-        current_att_correct, current_att_len = update_counts(current_att_correct, current_att_len, att_out, idx_att_true)
-    return 100 * (current_correct / current_len), current_correct, current_len, 100 * (current_att_correct / current_att_len), current_att_correct, current_att_len
+        if multi_att_supervision:
+            current_rprecision = update_counts_multi_att(current_rprecision, att_probs, idx_att_true)
+        else:
+            _, att_out = att_probs.max(dim=1)
+            current_att_correct, current_att_len = update_counts(current_att_correct, current_att_len, att_out, idx_att_true)
+    if multi_att_supervision:
+        perf_att = 100 * np.mean(current_rprecision)
+
+    else:
+        perf_att = 100 * (current_att_correct / current_att_len)
+
+    return 100 * (current_correct / current_len), current_correct, current_len, perf_att
 
 
-def eval_network(vocab_size, story_size, sentence_size, model, word_idx, output_size, output_idx, test_batches_id, test, log, logdir, args, cuda=0., test_q_ids=None, max_inspect=5, ignore_missing_preds=False):
+def eval_network(vocab_size, story_size, sentence_size, model, word_idx, output_size, output_idx, test_batches_id, test, log, logdir, args, cuda=0., test_q_ids=None, max_inspect=5, ignore_missing_preds=False, multi_att_supervision=True):
     log.info("Evaluating")
     if args.mode == "kv":
         net = KVN2N(args.batch_size, args.embed_size, vocab_size, args.hops, story_size=story_size, args=args,
@@ -258,7 +306,7 @@ def eval_network(vocab_size, story_size, sentence_size, model, word_idx, output_
 
     for batch, (s_batch, _) in zip(test_batch_gen, test_batches_id):
         if args.mode == "kv":
-            idx_out, idx_true, out, att_probs, idx_att_true = epoch_kv(batch, net, args.inspect, positional, word_idx, output_idx)
+            idx_out, idx_true, out, att_probs, idx_att_true = epoch_kv(batch, net, args.inspect, positional, multi_att_supervision)
         else:
             idx_out, idx_true, out, att_probs = epoch(batch, net, args.inspect)
         if args.inspect and n_inspect < max_inspect:
@@ -364,6 +412,7 @@ def main():
                             help="anneal every [anneal-epoch] epoch, default: 25")
     arg_parser.add_argument("--anneal-factor", type=int, default=2,
                             help="factor to anneal by every 'anneal-epoch(s)', default: 2")
+    arg_parser.add_argument("--att-type", type=str, default="cosine", help="attention mechanism: cosine | bilinear")
     arg_parser.add_argument("--average-embs", type=int, default=1, help="Flag to average context embs instead of summing.")
     arg_parser.add_argument("--batch-size", type=int, default=32, help="batch size for training, default: 32")
     arg_parser.add_argument("--cuda", type=int, default=0, help="train on GPU, default: 0")

@@ -6,7 +6,7 @@ from torch import nn
 from torch.autograd import Variable
 from torch.nn import functional as F
 
-from net_util import masked_log_softmax, masked_softmax
+from net_util import masked_log_softmax, masked_softmax, masked_sigmoid
 from util import get_position_encoding, long_tensor_type, load_emb, float_tensor_type, load_output_emb
 
 
@@ -23,6 +23,7 @@ class N2N(torch.nn.Module):
         self.freeze_pretrained_word_embed = args.freeze_pretrained_word_embed
         self.word_idx = word_idx
         self.output_idx = output_idx
+        self.att_type = args.att_type
         self.args = args
 
         if self.hops <= 0:
@@ -102,8 +103,10 @@ class N2N(torch.nn.Module):
         #self.lin_bn = nn.BatchNorm1d(4*embed_size)
 
 
-        #self.cos = nn.CosineSimilarity(dim=2)
-        self.bil = nn.Bilinear(embed_size, embed_size, embed_size)
+        if self.att_type == "cosine":
+            self.cos = nn.CosineSimilarity(dim=2)
+        elif self.att_type == "bilinear":
+            self.bil = nn.Bilinear(embed_size, embed_size, embed_size)
 
         #self.lin = nn.Linear(embed_size*4, embed_size)
         self.lin_final = nn.Linear(embed_size, output_size)
@@ -246,7 +249,7 @@ class N2N(torch.nn.Module):
 
 
 class KVN2N(N2N):
-    def forward(self, trainK, trainV, trainQ, trainVM, trainPM, trainKM, trainQM, inspect, positional=True):
+    def forward(self, trainK, trainV, trainQ, trainVM, trainPM, trainKM, trainQM, inspect, positional=True, multi_att_supervision=False):
         """
         :param trainVM: a B*V tensor masking all predictions which are not words/entities in the relevant document
         """
@@ -274,7 +277,7 @@ class KVN2N(N2N):
 
         if inspect:
             #w_u, att_probs = self.hop(S, queries_rep, self.A1, self.A2, trainPM, trainSM, inspect)  # , self.TA, self.TA2)
-            w_u, att_probs = self.hop(K, V, queries_rep, self.A1, self.A1, trainPM, trainKM, inspect, positional=positional)  # , self.TA, self.TA2)
+            w_u, att_probs = self.hop(K, V, queries_rep, self.A1, self.A1, trainPM, trainKM, inspect, positional=positional, multi_att_supervision=multi_att_supervision)  # , self.TA, self.TA2)
         else:
             #w_u = self.hop(S, queries_rep, self.A1, self.A2, trainPM, trainSM, inspect)  # , self.TA, self.TA2)
             w_u = self.hop(K, V, queries_rep, self.A1, self.A1, trainPM, trainKM, inspect, positional=positional)  # , self.TA, self.TA2)
@@ -282,7 +285,7 @@ class KVN2N(N2N):
         if self.hops >= 2:
             if inspect:
                 #w_u, att_probs = self.hop(S, w_u, self.A2, self.A3, trainPM, trainSM, inspect)  # , self.TA, self.TA3)
-                w_u, att_probs = self.hop(K, V, w_u, self.A3, self.A3, trainPM, trainKM, inspect, positional=positional)  # , self.TA, self.TA3)
+                w_u, att_probs = self.hop(K, V, w_u, self.A3, self.A3, trainPM, trainKM, inspect, positional=positional, multi_att_supervision=multi_att_supervision)  # , self.TA, self.TA3)
             else:
                 #w_u = self.hop(S, w_u, self.A2, self.A3, trainPM, trainSM, inspect)  # , self.TA, self.TA3)
                 w_u = self.hop(K, V, w_u, self.A3, self.A3, trainPM, trainKM, inspect, positional=positional)  # , self.TA, self.TA3)
@@ -290,7 +293,7 @@ class KVN2N(N2N):
         if self.hops >= 3:
             if inspect:
                 #w_u, att_probs = self.hop(S, w_u, self.A3, self.A4, trainPM, trainSM, inspect)  # , self.TA, self.TA4)
-                w_u, att_probs = self.hop(K, V, w_u, self.A4, self.A4, trainPM, trainKM, inspect, positional=positional)  # , self.TA, self.TA4)
+                w_u, att_probs = self.hop(K, V, w_u, self.A4, self.A4, trainPM, trainKM, inspect, positional=positional, multi_att_supervision=multi_att_supervision)  # , self.TA, self.TA4)
             else:
                 #w_u = self.hop(S, w_u, self.A3, self.A4, trainPM, trainSM, inspect)  # , self.TA, self.TA4)
                 w_u = self.hop(K, V, w_u, self.A4, self.A4, trainPM, trainKM, inspect, positional=positional)  # , self.TA, self.TA4)
@@ -325,7 +328,7 @@ class KVN2N(N2N):
         else:
             return out
 
-    def hop(self, trainK, trainV, u_k_1, A_k, C_k, PM, KM, inspect, positional=True):  # , temp_A_k, temp_C_k):
+    def hop(self, trainK, trainV, u_k_1, A_k, C_k, PM, KM, inspect, positional=True, multi_att_supervision=True):  # , temp_A_k, temp_C_k):
         mem_emb_A = self.embed_story(trainK, A_k, KM, positional=positional)  # B*S*d
         mem_emb_C = self.embed_values(trainV, C_k)  # B*S*d
 
@@ -340,10 +343,16 @@ class KVN2N(N2N):
         # zero out the masked (padded) sentence embeddings:
         #probabs = probabs * PM.unsqueeze(2).expand_as(probabs)
         #probabs = self.cos(mem_emb_A_temp, queries_temp)  # B*S
-        probabs = self.bil(mem_emb_A_temp, queries_temp)  # B*S*d
-        probabs = torch.sum(probabs, dim=2) # B*S
-        probabs_log = masked_log_softmax(probabs, PM)  # B*S
-        probabs = torch.exp(probabs_log)
+        if self.att_type == "cosine":
+            probabs = self.cos(mem_emb_A_temp, queries_temp)  # B*S
+        elif self.att_type =="bilinear":
+            probabs = self.bil(mem_emb_A_temp, queries_temp)  # B*S*d
+            probabs = torch.sum(probabs, dim=2) # B*S
+        if multi_att_supervision:
+            probabs = masked_sigmoid(probabs, PM)
+        else:
+            probabs_log = masked_log_softmax(probabs, PM)  # B*S
+            probabs = torch.exp(probabs_log)
         mem_emb_C_temp = mem_emb_C_temp.permute(0, 2, 1)   # B*d*S
         probabs_temp = probabs.unsqueeze(1).expand_as(mem_emb_C_temp)
 
@@ -355,7 +364,8 @@ class KVN2N(N2N):
         #hop_o = torch.cat((o, u_k_1, o + u_k_1, o * u_k_1), dim=1)  # B*4d
         hop_o = o + u_k_1  # B*d
         if inspect:
-            return hop_o, probabs
+            return hop_o, probabs if multi_att_supervision else probabs_log
+
         else:
             return hop_o
 

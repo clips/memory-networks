@@ -1,5 +1,22 @@
 import torch
 
+
+def masked_sigmoid(vector: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+    """
+    """
+    if mask is None:
+        result = torch.sigmoid(vector)
+    else:
+        mask = mask.float()
+        while mask.dim() < vector.dim():
+            mask = mask.unsqueeze(1)
+        # To limit numerical errors from large vector elements outside the mask, we zero these out.
+        result = torch.sigmoid(vector * mask)
+        result = result * mask
+        result = result / (result.sum(dim=-1, keepdim=True) + 1e-13)
+    return result
+
+
 # from AllenNLP:
 
 def masked_softmax(vector: torch.Tensor, mask: torch.Tensor, dim: int = -1) -> torch.Tensor:
