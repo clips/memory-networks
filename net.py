@@ -107,7 +107,11 @@ class N2N(torch.nn.Module):
             self.cos = nn.CosineSimilarity(dim=2)
         elif self.att_type == "bilinear":
             self.bil = nn.Bilinear(embed_size, embed_size, embed_size)
-
+        elif self.att_type == "mlp":
+            #self.mlp = MLP(2*embed_size*story_size, 2*embed_size, story_size)
+            self.mlp = MLP(2 * embed_size, embed_size, 1)  # compare two vecs and output a scalar
+            if torch.cuda.is_available() and args.cuda == 1:
+                self.mlp = self.mlp.cuda()
         #self.lin = nn.Linear(embed_size*4, embed_size)
         self.lin_final = nn.Linear(embed_size, output_size)
         if self.pretrained_output_layer:
@@ -348,6 +352,13 @@ class KVN2N(N2N):
         elif self.att_type =="bilinear":
             probabs = self.bil(mem_emb_A_temp, queries_temp)  # B*S*d
             probabs = torch.sum(probabs, dim=2) # B*S
+        elif self.att_type =="mlp":
+            probabs = float_tensor_type(self.batch_size, self.story_size)
+            query_input = u_k_1  # non-duplicated query vector, B*d
+            story_input = mem_emb_A_temp.permute(1,0,2)  # mem_emb_A_temp B*S*d -> S*B*d
+            for i, s in enumerate(story_input):
+                input = torch.cat((s, query_input), 1)  # -> B*2d
+                probabs[:,i] = self.mlp(input)  # B
         if multi_att_supervision:
             probabs = masked_sigmoid(probabs, PM)
         else:
@@ -490,4 +501,18 @@ class KVAtt(torch.nn.Module):
             batch_story_embedding = batch_story_embedding / normalizer
 
         return torch.squeeze(batch_story_embedding, dim=2)
+
+
+class MLP(nn.Module):
+    def __init__(self, input_size, hidden_size, num_classes):
+        super(MLP, self).__init__()
+        self.fc1 = nn.Linear(input_size, hidden_size)
+        self.relu = nn.ReLU()
+        self.fc2 = nn.Linear(hidden_size, num_classes)
+
+    def forward(self, x):
+        out = self.fc1(x)
+        out = self.relu(out)
+        out = self.fc2(out)
+        return out.squeeze(1)
 

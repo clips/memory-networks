@@ -20,7 +20,7 @@ from util import process_data, process_data_clicr
 
 
 def train_network(train_batches_id, val_batches_id, test_batches_id, data, val_data, test_data, word_idx, sentence_size,
-                  vocab_size, story_size, output_size, output_idx, save_model_path, args, log, max_inspect=15, multi_att_supervision=True):
+                  vocab_size, story_size, output_size, output_idx, save_model_path, args, log, max_inspect=15):
     if args.inspect:
         inv_output_idx = {v: k for k, v in output_idx.items()}
     if args.mode == "kv":
@@ -32,7 +32,7 @@ def train_network(train_batches_id, val_batches_id, test_batches_id, data, val_d
     if torch.cuda.is_available() and args.cuda == 1:
         net = net.cuda()
     #criterion = torch.nn.CrossEntropyLoss()
-    if multi_att_supervision:
+    if args.multi_att_supervision:
         criterion_att = torch.nn.BCELoss()
     else:
         criterion_att = torch.nn.NLLLoss()
@@ -67,7 +67,7 @@ def train_network(train_batches_id, val_batches_id, test_batches_id, data, val_d
                                                  output_size, output_idx, vectorizer, shuffle=args.shuffle)
         current_len = 0
         current_correct = 0
-        if multi_att_supervision:
+        if args.multi_att_supervision:
             current_rprecision = []
         else:
             current_att_len = 0
@@ -75,7 +75,7 @@ def train_network(train_batches_id, val_batches_id, test_batches_id, data, val_d
 
         for batch, (s_batch, _) in zip(train_batch_gen, train_batches_id):
             if args.mode == "kv":
-                idx_out, idx_true, out, att_probs, idx_att_true = epoch_kv(batch, net, args.inspect, positional, multi_att_supervision)
+                idx_out, idx_true, out, att_probs, idx_att_true = epoch_kv(batch, net, args.inspect, positional, args.multi_att_supervision)
             else:
                 idx_out, idx_true, out, att_probs = epoch(batch, net, args.inspect)
 
@@ -101,7 +101,7 @@ def train_network(train_batches_id, val_batches_id, test_batches_id, data, val_d
             clip_grad_norm_(net.parameters(), 40)
             running_loss += loss
             current_correct, current_len = update_counts(current_correct, current_len, idx_out, idx_true)
-            if multi_att_supervision:
+            if args.multi_att_supervision:
                 current_rprecision = update_counts_multi_att(current_rprecision, att_probs, idx_att_true)
             else:
                 _, att_out = att_probs.max(dim=1)
@@ -110,13 +110,13 @@ def train_network(train_batches_id, val_batches_id, test_batches_id, data, val_d
             optimizer.zero_grad()
         if current_epoch % args.log_epochs == 0:
             accuracy = 100 * (current_correct / current_len)
-            if multi_att_supervision:
+            if args.multi_att_supervision:
                 perf_att = 100 * np.mean(current_rprecision)
             else:
                 perf_att = 100 * (current_att_correct / current_att_len)
             if args.mode == "kv":
                 val_acc, val_cor, val_tot, val_att_perf = calculate_loss_and_accuracy_kv(net, val_batches_id, val_data, word_idx, sentence_size, story_size,
-                                                                    output_size, output_idx, vectorizer, args.inspect, positional, multi_att_supervision)
+                                                                    output_size, output_idx, vectorizer, args.inspect, positional, args.multi_att_supervision)
             else:
                 val_acc, val_cor, val_tot = calculate_loss_and_accuracy(net, val_batches_id, val_data, word_idx,
                                                                     sentence_size, story_size,
@@ -269,7 +269,7 @@ def calculate_loss_and_accuracy_kv(net, batches_id, data, word_idx, sentence_siz
     return 100 * (current_correct / current_len), current_correct, current_len, perf_att
 
 
-def eval_network(vocab_size, story_size, sentence_size, model, word_idx, output_size, output_idx, test_batches_id, test, log, logdir, args, cuda=0., test_q_ids=None, max_inspect=5, ignore_missing_preds=False, multi_att_supervision=True):
+def eval_network(vocab_size, story_size, sentence_size, model, word_idx, output_size, output_idx, test_batches_id, test, log, logdir, args, cuda=0., test_q_ids=None, max_inspect=5, ignore_missing_preds=False):
     log.info("Evaluating")
     if args.mode == "kv":
         net = KVN2N(args.batch_size, args.embed_size, vocab_size, args.hops, story_size=story_size, args=args,
@@ -306,7 +306,7 @@ def eval_network(vocab_size, story_size, sentence_size, model, word_idx, output_
 
     for batch, (s_batch, _) in zip(test_batch_gen, test_batches_id):
         if args.mode == "kv":
-            idx_out, idx_true, out, att_probs, idx_att_true = epoch_kv(batch, net, args.inspect, positional, multi_att_supervision)
+            idx_out, idx_true, out, att_probs, idx_att_true = epoch_kv(batch, net, args.inspect, positional, args.multi_att_supervision)
         else:
             idx_out, idx_true, out, att_probs = epoch(batch, net, args.inspect)
         if args.inspect and n_inspect < max_inspect:
@@ -412,7 +412,7 @@ def main():
                             help="anneal every [anneal-epoch] epoch, default: 25")
     arg_parser.add_argument("--anneal-factor", type=int, default=2,
                             help="factor to anneal by every 'anneal-epoch(s)', default: 2")
-    arg_parser.add_argument("--att-type", type=str, default="cosine", help="attention mechanism: cosine | bilinear")
+    arg_parser.add_argument("--att-type", type=str, default="cosine", help="attention mechanism: cosine | bilinear | mlp")
     arg_parser.add_argument("--average-embs", type=int, default=1, help="Flag to average context embs instead of summing.")
     arg_parser.add_argument("--batch-size", type=int, default=32, help="batch size for training, default: 32")
     arg_parser.add_argument("--cuda", type=int, default=0, help="train on GPU, default: 0")
@@ -438,6 +438,7 @@ def main():
     arg_parser.add_argument("--max-n-load", type=int, help="maximum number of clicr documents to use, for debugging")
     arg_parser.add_argument("--memory-size", type=int, default=50, help="upper limit on memory size, default: 50")
     arg_parser.add_argument("--mode", type=str, default="standard", help="standard | kv")
+    arg_parser.add_argument("--multi-att-supervision", type=int, default=1)
     arg_parser.add_argument("--pretrained-output-layer", type=str,
                             help="path to the txt file with concept embeddings to use at the output layer")  # "/mnt/b5320167-5dbd-4498-bf34-173ac5338c8d/Datasets/clinical_embs/pubmed_mimic_clicr/pub_mim_cli.embeddings"
     arg_parser.add_argument("--pretrained-word-embed", type=str,
