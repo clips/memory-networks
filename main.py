@@ -87,16 +87,16 @@ def train_network(train_batches_id, val_batches_id, test_batches_id, data, val_d
                 else:
                     inspect(out, idx_true, os.path.dirname(save_model_path), current_epoch, s_batch, att_probs, inv_output_idx, data, args, log)
                 n_inspect += 1
-            if current_epoch < args.epochs-2:
-                loss = criterion_att(att_probs, idx_att_true)  # attention supervision
-            else:
-                if current_epoch == args.epochs-2:
-                    optimizer = torch.optim.Adam(net.parameters(), lr=args.lr)
-                    optimizer.zero_grad()
-                loss = criterion(out, idx_true)  # downstream
-            #loss1 = criterion(out, idx_true)  # downstream
-            #loss2 = criterion_att(att_probs, idx_att_true)  # attention supervision
-            #loss = loss1 + loss2
+            #if current_epoch < args.epochs-2:
+            #    loss = criterion_att(att_probs, idx_att_true)  # attention supervision
+            #else:
+            #    if current_epoch == args.epochs-2:
+            #        optimizer = torch.optim.Adam(net.parameters(), lr=args.lr)
+            #        optimizer.zero_grad()
+            #    loss = criterion(out, idx_true)  # downstream
+            loss1 = criterion(out, idx_true)  # downstream
+            loss2 = criterion_att(att_probs, idx_att_true)  # attention supervision
+            loss = loss1 + loss2
             loss.backward()
             clip_grad_norm_(net.parameters(), 40)
             running_loss += loss

@@ -106,7 +106,10 @@ class N2N(torch.nn.Module):
         if self.att_type == "cosine":
             self.cos = nn.CosineSimilarity(dim=2)
         elif self.att_type == "bilinear":
-            self.bil = nn.Bilinear(embed_size, embed_size, embed_size)
+            #self.bil = nn.Bilinear(embed_size, embed_size, embed_size)
+            self.bil = nn.Bilinear(embed_size, embed_size, 1)  # compare two vecs and output a scalar
+            if torch.cuda.is_available() and args.cuda == 1:
+                self.bil = self.bil.cuda()
         elif self.att_type == "mlp":
             #self.mlp = MLP(2*embed_size*story_size, 2*embed_size, story_size)
             self.mlp = MLP(2 * embed_size, embed_size, 1)  # compare two vecs and output a scalar
@@ -350,8 +353,11 @@ class KVN2N(N2N):
         if self.att_type == "cosine":
             probabs = self.cos(mem_emb_A_temp, queries_temp)  # B*S
         elif self.att_type =="bilinear":
-            probabs = self.bil(mem_emb_A_temp, queries_temp)  # B*S*d
-            probabs = torch.sum(probabs, dim=2) # B*S
+            probabs = float_tensor_type(self.batch_size, self.story_size)
+            query_input = u_k_1  # non-duplicated query vector, B*d
+            story_input = mem_emb_A_temp.permute(1, 0, 2)  # mem_emb_A_temp B*S*d -> S*B*d
+            for i, s in enumerate(story_input):
+                probabs[:, i] = self.bil(s, query_input).squeeze(1)  # B
         elif self.att_type =="mlp":
             probabs = float_tensor_type(self.batch_size, self.story_size)
             query_input = u_k_1  # non-duplicated query vector, B*d
