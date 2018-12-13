@@ -24,6 +24,7 @@ class N2N(torch.nn.Module):
         self.word_idx = word_idx
         self.output_idx = output_idx
         self.att_type = args.att_type
+        self.hard_att = args.hard_att
         self.args = args
 
         if self.hops <= 0:
@@ -368,8 +369,21 @@ class KVN2N(N2N):
         if multi_att_supervision:
             probabs = masked_sigmoid(probabs, PM)
         else:
+            #if self.hard_att:
+                #_, max_idx = torch.max(probabs*PM, 1)
+                #_probabs = torch.zeros_like(probabs)
+                #for i in range(len(max_idx)):
+                #    _probabs[i, max_idx[i]] = 1.
+                #probabs_log = ???
+            #else:
             probabs_log = masked_log_softmax(probabs, PM)  # B*S
             probabs = torch.exp(probabs_log)
+            if self.hard_att:
+                _, max_idx = torch.max(probabs*PM, 1)
+                _probabs = torch.zeros_like(probabs)
+                for i in range(len(max_idx)):
+                    _probabs[i, max_idx[i]] = 1.
+                probabs = _probabs
         mem_emb_C_temp = mem_emb_C_temp.permute(0, 2, 1)   # B*d*S
         probabs_temp = probabs.unsqueeze(1).expand_as(mem_emb_C_temp)
 

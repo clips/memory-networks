@@ -45,7 +45,7 @@ SYMB_END = "@end"
 
 
 def process_data_clicr(args, log):
-    data, val_data, test_data, vocab = load_data_clicr(args.data_dir, args.ent_setup, log, args.max_n_load)
+    data, val_data, test_data, vocab = load_data_clicr(args.data_dir, args.ent_setup, log, args.max_n_load, args.which_test)
 
     '''
     clicr data is of the form:
@@ -81,7 +81,7 @@ def process_data_clicr(args, log):
     return data, val_data, test_data, sentence_size, vocab_size, memory_size, word_idx, output_size, output_idx
 
 def process_data_clicr_kv(args, log):
-    data, val_data, test_data, vocab = load_data_clicr_kv(args.data_dir, args.ent_setup, log, args.win_size_kv, args.max_n_load)
+    data, val_data, test_data, vocab = load_data_clicr_kv(args.data_dir, args.ent_setup, log, args.win_size_kv, args.max_n_load, args.which_test)
 
     '''
     clicr data is of the form:
@@ -372,12 +372,18 @@ def process_data(args, log):
     return data, test_data, sentence_size, vocab_size, memory_size, word_idx
 
 
-def load_data_clicr(data_dir, ent_setup, log, max_n_load=None):
+def load_data_clicr(data_dir, ent_setup, log, max_n_load=None, which_test=None):
     #train_data, _ = load_clicr_ent_only(data_dir + "train1.0.json", ent_setup, max_n_load=max_n_load)
     train_data, _ = load_clicr(data_dir + "train1.0.json", ent_setup, max_n_load=max_n_load)
     val_data, _ = load_clicr(data_dir + "dev1.0.json", ent_setup, remove_notfound=False, max_n_load=max_n_load)
-    test_data, _ = load_clicr(data_dir + "test1.0.json", ent_setup, remove_notfound=False, max_n_load=max_n_load)
-
+    if which_test == "seen":
+        test_data, _ = load_clicr(data_dir + "test_seen1.0.json", ent_setup, remove_notfound=False, max_n_load=max_n_load)
+    elif which_test == "unseen":
+        test_data, _ = load_clicr(data_dir + "test_unseen1.0.json", ent_setup, remove_notfound=False,
+                                  max_n_load=max_n_load)
+    else:
+        test_data, _ = load_clicr(data_dir + "test1.0.json", ent_setup, remove_notfound=False,
+                                  max_n_load=max_n_load)
     data = train_data + val_data + test_data  # TODO exclude test?
 
     vocab_set = set()
@@ -388,12 +394,17 @@ def load_data_clicr(data_dir, ent_setup, log, max_n_load=None):
 
     return train_data, val_data, test_data, vocab
 
-def load_data_clicr_kv(data_dir, ent_setup, log, win_size=3, max_n_load=None):
+def load_data_clicr_kv(data_dir, ent_setup, log, win_size=3, max_n_load=None, which_test=None):
     #train_data, _ = load_clicr_ent_only(data_dir + "train1.0.json", ent_setup, max_n_load=max_n_load)
     train_data = load_clicr_kv(data_dir + "train1.0.json", win_size=win_size, ent_setup=ent_setup, max_n_load=max_n_load)
     val_data = load_clicr_kv(data_dir + "dev1.0.json", win_size=win_size, ent_setup=ent_setup, remove_notfound=False, max_n_load=max_n_load)
-    test_data = load_clicr_kv(data_dir + "test1.0.json", win_size=win_size, ent_setup=ent_setup, remove_notfound=False, max_n_load=max_n_load)
-
+    if which_test == "seen":
+        test_data = load_clicr_kv(data_dir + "test_seen1.0.json", win_size=win_size, ent_setup=ent_setup,
+                                  remove_notfound=False, max_n_load=max_n_load)
+    elif which_test == "unseen":
+        test_data = load_clicr_kv(data_dir + "test_unseen1.0.json", win_size=win_size, ent_setup=ent_setup, remove_notfound=False, max_n_load=max_n_load)
+    else:
+        test_data = load_clicr_kv(data_dir + "test1.0.json", win_size=win_size, ent_setup=ent_setup, remove_notfound=False, max_n_load=max_n_load)
     data = train_data + val_data + test_data  # TODO exclude test?
 
     vocab_set = set()
