@@ -81,7 +81,8 @@ def process_data_clicr(args, log):
     return data, val_data, test_data, sentence_size, vocab_size, memory_size, word_idx, output_size, output_idx
 
 def process_data_clicr_kv(args, log):
-    data, val_data, test_data, vocab = load_data_clicr_kv(args.data_dir, args.ent_setup, log, args.win_size_kv, args.max_n_load, args.which_test)
+    ent_in_ctx = True  # in keys, use entities as contexts. False will use words
+    data, val_data, test_data, vocab = load_data_clicr_kv(args.data_dir, args.ent_setup, log, args.win_size_kv, args.max_n_load, args.which_test, ent_in_ctx)
 
     '''
     clicr data is of the form:
@@ -132,12 +133,12 @@ def process_data_kv(args, log):
     return data, test_data, k_size, v_size, vocab_size, memory_size, word_idx
 
 
-def load_clicr_kv(fn, ent_setup="ent", win_size=3, remove_notfound=True, max_n_load=None):
+def load_clicr_kv(fn, ent_setup="ent", win_size=3, remove_notfound=True, max_n_load=None, ent_in_ctx=True):
     questions = []
     raw = load_json(fn)
     for c, datum in enumerate(raw[DATA_KEY]):
         doc_txt = datum[DOC_KEY][TITLE_KEY] + "\n" + datum[DOC_KEY][CONTEXT_KEY]
-        keys, values = prepare_kv(doc_txt, win_size=win_size)  # n_words*d
+        keys, values = prepare_kv(doc_txt, win_size=win_size, ent_in_ctx=ent_in_ctx)  # n_words*d
         assert len(keys) == len(values)
 
         sents = []
@@ -272,7 +273,7 @@ def prepare_kv_babi(text, win_size=3):
     return keys, values
 
 
-def prepare_kv(text, win_size=3):
+def prepare_kv(text, win_size=3, ent_in_ctx=False):
     values = []
     keys = []  # n_words*(2*win_size)
     for line in text.split("\n"):
@@ -282,9 +283,13 @@ def prepare_kv(text, win_size=3):
             concept = line[i_start + len("BEG__"):i_end - len("__END")]
             concept = "@entity" + concept.replace(" ", "_").lower()
             txt_left = line[:i_start].strip()
-            lst_left = txt_left.split()
             txt_right = line[i_end:].strip()
-            lst_right = txt_right.split()
+            if ent_in_ctx:
+                lst_left = to_entities(txt_left).split()
+                lst_right = to_entities(txt_right).split()
+            else:
+                lst_left = txt_left.split()
+                lst_right = txt_right.split()
             lst = lst_left + lst_right
             i = len(lst_left)
             window_start = max(0, i - win_size)
@@ -293,7 +298,8 @@ def prepare_kv(text, win_size=3):
             # go over contexts
             for j in range(window_start, window_end):
                 w = lst[j]
-                w = remove_concept_marks(w)
+                if not ent_in_ctx:
+                    w = remove_concept_marks(w)
                 contexts.append(w.lower())
             if not contexts:
                 continue
@@ -394,17 +400,17 @@ def load_data_clicr(data_dir, ent_setup, log, max_n_load=None, which_test=None):
 
     return train_data, val_data, test_data, vocab
 
-def load_data_clicr_kv(data_dir, ent_setup, log, win_size=3, max_n_load=None, which_test=None):
+def load_data_clicr_kv(data_dir, ent_setup, log, win_size=3, max_n_load=None, which_test=None, ent_in_ctx=True):
     #train_data, _ = load_clicr_ent_only(data_dir + "train1.0.json", ent_setup, max_n_load=max_n_load)
-    train_data = load_clicr_kv(data_dir + "train1.0.json", win_size=win_size, ent_setup=ent_setup, max_n_load=max_n_load)
-    val_data = load_clicr_kv(data_dir + "dev1.0.json", win_size=win_size, ent_setup=ent_setup, remove_notfound=False, max_n_load=max_n_load)
+    train_data = load_clicr_kv(data_dir + "train1.0.json", win_size=win_size, ent_setup=ent_setup, max_n_load=max_n_load, ent_in_ctx=ent_in_ctx)
+    val_data = load_clicr_kv(data_dir + "dev1.0.json", win_size=win_size, ent_setup=ent_setup, remove_notfound=False, max_n_load=max_n_load, ent_in_ctx=ent_in_ctx)
     if which_test == "seen":
         test_data = load_clicr_kv(data_dir + "test_seen1.0.json", win_size=win_size, ent_setup=ent_setup,
-                                  remove_notfound=False, max_n_load=max_n_load)
+                                  remove_notfound=False, max_n_load=max_n_load, ent_in_ctx=ent_in_ctx)
     elif which_test == "unseen":
-        test_data = load_clicr_kv(data_dir + "test_unseen1.0.json", win_size=win_size, ent_setup=ent_setup, remove_notfound=False, max_n_load=max_n_load)
+        test_data = load_clicr_kv(data_dir + "test_unseen1.0.json", win_size=win_size, ent_setup=ent_setup, remove_notfound=False, max_n_load=max_n_load, ent_in_ctx=ent_in_ctx)
     else:
-        test_data = load_clicr_kv(data_dir + "test1.0.json", win_size=win_size, ent_setup=ent_setup, remove_notfound=False, max_n_load=max_n_load)
+        test_data = load_clicr_kv(data_dir + "test1.0.json", win_size=win_size, ent_setup=ent_setup, remove_notfound=False, max_n_load=max_n_load, ent_in_ctx=ent_in_ctx)
     data = train_data + val_data + test_data  # TODO exclude test?
 
     vocab_set = set()
