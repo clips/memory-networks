@@ -91,16 +91,18 @@ def train_network(train_batches_id, val_batches_id, test_batches_id, data, val_d
                     inspect(out, idx_true, os.path.dirname(save_model_path), current_epoch, s_batch, att_probs,
                             inv_output_idx, data, args, log)
                 n_inspect += 1
-            if current_epoch < args.epochs - 2:
+            """
+            if current_epoch < args.epochs - 4:
                 loss = criterion_att(att_probs, idx_att_true)  # attention supervision
             else:
-                if current_epoch == args.epochs - 2:
+                if current_epoch == args.epochs - 4:
                     optimizer = torch.optim.Adam(net.parameters(), lr=args.lr)
                     optimizer.zero_grad()
                 loss = criterion(out, idx_true)  # downstream
-            # loss1 = criterion(out, idx_true)  # downstream
-            # loss2 = criterion_att(att_probs, idx_att_true)  # attention supervision
-            # loss = loss1 + loss2
+            """
+            loss1 = criterion(out, idx_true)  # downstream
+            loss2 = criterion_att(att_probs, idx_att_true)  # attention supervision
+            loss = loss1 + loss2
             loss.backward()
             clip_grad_norm_(net.parameters(), 40)
             running_loss += loss
@@ -393,9 +395,9 @@ def inspect(out, idx_true, fig_dir, current_epoch, n, att_probs, inv_output_idx,
     log.info("\n{}\nQuery:\n{}".format(inst_id, " ".join(data[n][1])))
     log.info("\nPassage sentence with max. attention:\n{}\n".format(" ".join(data[n][0][np.argmax(att)])))
     plt.plot(att)
-    lens = np.array([len(l) for l in data[n][0]])
-    plt.plot(lens / np.sum(lens), linestyle='dashed')
-    plt.axvline(x=len(data[n][0]), color="red")
+    #lens = np.array([len(l) for l in data[n][0]])
+    #plt.plot(lens / np.sum(lens), linestyle='dashed')
+    #plt.axvline(x=len(data[n][0]), color="red")
     fig_path = "{}/{}_ep{}.png".format(fig_dir, inst_id, current_epoch)
     plt.savefig(fig_path, bbox_inches='tight')
     plt.close("all")
@@ -415,12 +417,14 @@ def inspect_kv(out, idx_true, fig_dir, current_epoch, n, att_probs, inv_output_i
     assert not args.shuffle
     inst_id = data[n][5]
     att = att_probs[0].detach().cpu().numpy()
+    if np.sum(att) <0:  # log probs
+        att = np.exp(att)
     log.info("\n{}\nQuery:\n{}".format(inst_id, " ".join(data[n][1])))
     log.info("\nPassage sentence with max. attention:\n{}\n".format(" ".join(data[n][0][0][np.argmax(att)])))
     plt.plot(att)
-    lens = np.array([len(l) for l in data[n][0][0]])
-    plt.plot(lens / np.sum(lens), linestyle='dashed')
-    plt.axvline(x=len(data[n][0][0]), color="red")
+    #lens = np.array([len(l) for l in data[n][0][0]])
+    #plt.plot(lens / np.sum(lens), linestyle='dashed')
+    #plt.axvline(x=len(data[n][0][0]), color="red")
     fig_path = "{}/{}_ep{}.png".format(fig_dir, inst_id, current_epoch)
     plt.savefig(fig_path, bbox_inches='tight')
     plt.close("all")

@@ -100,7 +100,7 @@ class N2N(torch.nn.Module):
         # self.W = nn.Parameter(torch.randn(embed_size, vocab_size), requires_grad=True)
         #self.nonlin = nn.ReLU()
         #self.lin = nn.Linear(embed_size, embed_size)
-        #self.dropout = nn.Dropout(0.5)
+
         #self.lin_bn = nn.BatchNorm1d(4*embed_size)
 
 
@@ -108,6 +108,7 @@ class N2N(torch.nn.Module):
             self.cos = nn.CosineSimilarity(dim=2)
         elif self.att_type == "bilinear":
             #self.bil = nn.Bilinear(embed_size, embed_size, embed_size)
+            self.dropout = nn.Dropout(0.2)
             self.bil = nn.Bilinear(embed_size, embed_size, 1)  # compare two vecs and output a scalar
             if torch.cuda.is_available() and args.cuda == 1:
                 self.bil = self.bil.cuda()
@@ -358,6 +359,7 @@ class KVN2N(N2N):
             query_input = u_k_1  # non-duplicated query vector, B*d
             story_input = mem_emb_A_temp.permute(1, 0, 2)  # mem_emb_A_temp B*S*d -> S*B*d
             for i, s in enumerate(story_input):
+                #probabs[:, i] = self.bil(self.dropout(s), self.dropout(query_input)).squeeze(1)  # B
                 probabs[:, i] = self.bil(s, query_input).squeeze(1)  # B
         elif self.att_type =="mlp":
             probabs = float_tensor_type(self.batch_size, self.story_size)
