@@ -12,20 +12,25 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from logger import get_logger
-from net import N2N, KVN2N
+from net import N2N, KVN2N, KVN2NPointer
 from util import long_tensor_type, vectorize_data_clicr, vectorized_batches, vectorize_data, evaluate_clicr, save_json, \
     get_q_ids_clicr, remove_missing_preds, deentitize, process_data_clicr_kv, vectorized_batches_kv, \
-    vectorize_data_clicr_kv, float_tensor_type
+    vectorize_data_clicr_kv, float_tensor_type, process_data_clicr_kvpointer, vectorized_batches_kvpointer, \
+    vectorize_data_clicr_kvpointer
 from util import process_data, process_data_clicr
 
 
 def train_network(train_batches_id, val_batches_id, test_batches_id, data, val_data, test_data, word_idx, sentence_size,
                   vocab_size, story_size, output_size, output_idx, save_model_path, args, log, max_inspect=15):
-    if args.inspect:
+    if args.inspect and args.mode != "kvpointer":
         inv_output_idx = {v: k for k, v in output_idx.items()}
     if args.mode == "kv":
         net = KVN2N(args.batch_size, args.embed_size, vocab_size, args.hops, story_size=story_size, args=args,
                     word_idx=word_idx, output_size=output_size, output_idx=output_idx)
+        positional = False  # don't use positional encoding for KV network
+    elif args.mode == "kvpointer":
+        net = KVN2NPointer(args.batch_size, args.embed_size, vocab_size, args.hops, story_size=story_size, args=args,
+                    word_idx=word_idx, output_size=output_size)
         positional = False  # don't use positional encoding for KV network
     else:
         net = N2N(args.batch_size, args.embed_size, vocab_size, args.hops, story_size=story_size, args=args,
@@ -50,6 +55,8 @@ def train_network(train_batches_id, val_batches_id, test_batches_id, data, val_d
             vectorizer = vectorize_data_clicr
         elif args.mode == "kv":
             vectorizer = vectorize_data_clicr_kv
+        elif args.mode == "kvpointer":
+            vectorizer = vectorize_data_clicr_kvpointer
     elif args.dataset == "babi":
         vectorizer = vectorize_data
     else:
@@ -66,7 +73,11 @@ def train_network(train_batches_id, val_batches_id, test_batches_id, data, val_d
         elif args.mode == "kv":
             k_size = sentence_size
             train_batch_gen = vectorized_batches_kv(train_batches_id, data, word_idx, k_size, story_size,
-                                                    output_size, output_idx, vectorizer, shuffle=args.shuffle)
+                                                    output_size, vectorizer, shuffle=args.shuffle)
+        elif args.mode == "kvpointer":
+            k_size = sentence_size
+            train_batch_gen = vectorized_batches_kvpointer(train_batches_id, data, word_idx, k_size, story_size,
+                                                    output_size, vectorizer, shuffle=args.shuffle)
         current_len = 0
         current_correct = 0
         if args.multi_att_supervision:
@@ -79,11 +90,14 @@ def train_network(train_batches_id, val_batches_id, test_batches_id, data, val_d
             if args.mode == "kv":
                 idx_out, idx_true, out, att_probs, idx_att_true = epoch_kv(batch, net, args.inspect, positional,
                                                                            args.multi_att_supervision)
+            if args.mode == "kvpointer":
+                idx_out, idx_true, out, att_probs, idx_att_true, ent_out = epoch_kvpointer(batch, net, args.inspect, positional,
+                                                                           args.multi_att_supervision)
             else:
                 idx_out, idx_true, out, att_probs = epoch(batch, net, args.inspect)
 
             # if current_epoch == args.epochs - 1 and args.inspect and n_inspect < max_inspect:
-            if args.inspect and n_inspect < max_inspect:
+            if args.inspect and n_inspect < max_inspect and args.mode != "kvpointer":
                 if args.mode == "kv":
                     inspect_kv(out, idx_true, os.path.dirname(save_model_path), current_epoch, s_batch, att_probs,
                                inv_output_idx, data, args, log)
@@ -100,9 +114,11 @@ def train_network(train_batches_id, val_batches_id, test_batches_id, data, val_d
                     optimizer.zero_grad()
                 loss = criterion(out, idx_true)  # downstream
             """
+            #TODO all true answer occurrences
             loss1 = criterion(out, idx_true)  # downstream
-            loss2 = criterion_att(att_probs, idx_att_true)  # attention supervision
-            loss = loss1 + loss2
+            #loss2 = criterion_att(att_probs, idx_att_true)  # attention supervision
+            #loss = loss1 + loss2
+            loss = loss1
             loss.backward()
             clip_grad_norm_(net.parameters(), 40)
             running_loss += loss
@@ -126,6 +142,14 @@ def train_network(train_batches_id, val_batches_id, test_batches_id, data, val_d
                                                                                          word_idx, sentence_size,
                                                                                          story_size,
                                                                                          output_size, output_idx,
+                                                                                         vectorizer, args.inspect,
+                                                                                         positional,
+                                                                                         args.multi_att_supervision)
+            if args.mode == "kvpointer":
+                val_acc, val_cor, val_tot, val_att_perf = calculate_loss_and_accuracy_kvpointer(net, val_batches_id, val_data,
+                                                                                         word_idx, sentence_size,
+                                                                                         story_size,
+                                                                                         output_size,
                                                                                          vectorizer, args.inspect,
                                                                                          positional,
                                                                                          args.multi_att_supervision)
@@ -224,6 +248,53 @@ def epoch_kv(batch, net, inspect=False, positional=True, multi_att_supervision=F
     return idx_out, idx_true, out, att_probs if inspect else None, idx_att_true
 
 
+def epoch_kvpointer(batch, net, inspect=False, positional=True, multi_att_supervision=False):
+    key_batch = batch[0]
+    value_batch = batch[1]
+    query_batch = batch[2]
+    answer_batch = batch[3]
+    pasmask_batch = batch[4]
+    keymask_batch = batch[5]
+    querymask_batch = batch[6]
+    attanswer_batch = batch[7]
+
+    A = Variable(torch.stack(answer_batch, dim=0), requires_grad=False).type(long_tensor_type)
+    _, idx_true = torch.max(A, 1)
+    idx_true = torch.squeeze(idx_true)
+
+    K = torch.stack(key_batch, dim=0)
+    V = torch.stack(value_batch, dim=0)
+    Q = torch.stack(query_batch, dim=0)
+    PM = torch.stack(pasmask_batch, dim=0) if pasmask_batch is not None else None
+    KM = torch.stack(keymask_batch, dim=0) if keymask_batch is not None else None
+    QM = torch.stack(querymask_batch, dim=0) if querymask_batch is not None else None
+
+    if inspect:
+        out, att_probs = net(K, V, Q, PM, KM, QM, inspect, positional=positional,
+                             multi_att_supervision=multi_att_supervision)
+    else:
+        out = net(K, V, Q, PM, KM, QM, inspect, positional=positional)
+
+    # attention supervision
+    AA = Variable(torch.stack(attanswer_batch, dim=0), requires_grad=False).type(float_tensor_type)
+    if multi_att_supervision:
+        idx_att_true = AA
+    # else:
+    #    # note that attanswer_batch contains marks for all true-answer occurrences among the values;
+    #    # here, we only consider the first (=max) true-answer occurrence in the memory
+    #    _, idx_att_true = torch.max(AA, 1)
+    #    idx_att_true = torch.squeeze(idx_att_true)
+    else:
+        # don't take the first max, but the most probable prediction
+        _, idx_att_true = torch.max(AA * torch.exp(att_probs), 1)
+        idx_att_true = torch.squeeze(idx_att_true)
+    _, idx_out = torch.max(out, 1)
+    # we have answer positions in Values, get actual entity ids:
+    ent_out = V[range(V.shape[0]), idx_out]
+
+    return idx_out, idx_true, out, att_probs if inspect else None, idx_att_true, ent_out
+
+
 def update_counts(current_correct, current_len, idx_out, idx_true):
     batch_len, correct = count_predictions(idx_true, idx_out)
     current_len += batch_len
@@ -297,6 +368,36 @@ def calculate_loss_and_accuracy_kv(net, batches_id, data, word_idx, sentence_siz
     return 100 * (current_correct / current_len), current_correct, current_len, perf_att
 
 
+def calculate_loss_and_accuracy_kvpointer(net, batches_id, data, word_idx, sentence_size, story_size, output_size,
+                                   vectorizer, inspect=False, positional=False, multi_att_supervision=False):
+    batch_gen = vectorized_batches_kvpointer(batches_id, data, word_idx, sentence_size, story_size, output_size,
+                                      vectorizer)
+    current_len = 0
+    current_correct = 0
+    if multi_att_supervision:
+        current_rprecision = []
+    else:
+        current_att_len = 0
+        current_att_correct = 0
+    for batch in batch_gen:
+        idx_out, idx_true, out, att_probs, idx_att_true, ent_out = epoch_kvpointer(batch, net, inspect, positional,
+                                                                   multi_att_supervision)
+        current_correct, current_len = update_counts(current_correct, current_len, idx_out, idx_true)
+        if multi_att_supervision:
+            current_rprecision = update_counts_multi_att(current_rprecision, att_probs, idx_att_true)
+        else:
+            _, att_out = att_probs.max(dim=1)
+            current_att_correct, current_att_len = update_counts(current_att_correct, current_att_len, att_out,
+                                                                 idx_att_true)
+    if multi_att_supervision:
+        perf_att = 100 * np.mean(current_rprecision)
+
+    else:
+        perf_att = 100 * (current_att_correct / current_att_len)
+
+    return 100 * (current_correct / current_len), current_correct, current_len, perf_att
+
+
 def eval_network(vocab_size, story_size, sentence_size, model, word_idx, output_size, output_idx, test_batches_id, test,
                  log, logdir, args, cuda=0., test_q_ids=None, max_inspect=5, ignore_missing_preds=False):
     log.info("Evaluating")
@@ -304,11 +405,19 @@ def eval_network(vocab_size, story_size, sentence_size, model, word_idx, output_
         net = KVN2N(args.batch_size, args.embed_size, vocab_size, args.hops, story_size=story_size, args=args,
                     word_idx=word_idx, output_size=output_size, output_idx=output_idx)
         positional = False  # don't use positional encoding for KV network
+    elif args.mode == "kvpointer":
+        net = KVN2NPointer(args.batch_size, args.embed_size, vocab_size, args.hops, story_size=story_size, args=args,
+                    word_idx=word_idx, output_size=output_size)
+        positional = False  # don't use positional encoding for KV network
     else:
         net = N2N(args.batch_size, args.embed_size, vocab_size, args.hops, story_size=story_size, args=args,
                   word_idx=word_idx, output_size=output_size)
     net.load_state_dict(torch.load(model))
-    inv_output_idx = {v: k for k, v in output_idx.items()}
+
+    if args.mode == "kvpointer":
+        inv_word_idx = {v: k for k, v in word_idx.items()}
+    else:
+        inv_output_idx = {v: k for k, v in output_idx.items()}
     if args.inspect:
         n_inspect = 0
 
@@ -319,6 +428,8 @@ def eval_network(vocab_size, story_size, sentence_size, model, word_idx, output_
             vectorizer = vectorize_data_clicr
         elif args.mode == "kv":
             vectorizer = vectorize_data_clicr_kv
+        elif args.mode == "kvpointer":
+            vectorizer = vectorize_data_clicr_kvpointer
     elif args.dataset == "babi":
         vectorizer = vectorize_data
     else:
@@ -330,6 +441,10 @@ def eval_network(vocab_size, story_size, sentence_size, model, word_idx, output_
         k_size = sentence_size
         test_batch_gen = vectorized_batches_kv(test_batches_id, test, word_idx, k_size, story_size,
                                                output_size, output_idx, vectorizer, shuffle=args.shuffle)
+    elif args.mode == "kvpointer":
+        k_size = sentence_size
+        test_batch_gen = vectorized_batches_kvpointer(test_batches_id, test, word_idx, k_size, story_size,
+                                               output_size, vectorizer, shuffle=args.shuffle)
     current_len = 0
     current_correct = 0
     preds = {} if args.dataset == "clicr" else None
@@ -338,9 +453,12 @@ def eval_network(vocab_size, story_size, sentence_size, model, word_idx, output_
         if args.mode == "kv":
             idx_out, idx_true, out, att_probs, idx_att_true = epoch_kv(batch, net, args.inspect, positional,
                                                                        args.multi_att_supervision)
+        elif args.mode == "kvpointer":
+            idx_out, idx_true, out, att_probs, idx_att_true, ent_out = epoch_kvpointer(batch, net, args.inspect, positional,
+                                                                       args.multi_att_supervision)
         else:
             idx_out, idx_true, out, att_probs = epoch(batch, net, args.inspect)
-        if args.inspect and n_inspect < max_inspect:
+        if args.inspect and n_inspect < max_inspect and args.mode != "kvpointer":
             if args.mode == "kv":
                 inspect_kv(out, idx_true, logdir, "eval", s_batch, att_probs,
                            inv_output_idx, test, args, log)
@@ -349,9 +467,13 @@ def eval_network(vocab_size, story_size, sentence_size, model, word_idx, output_
                         inv_output_idx, test, args, log)
             n_inspect += 1
         if preds is not None:
-            for c, i in enumerate(idx_out):
-                # {query_id: answer}
-                preds[test[s_batch + c][5]] = deentitize(inv_output_idx[i.item()])
+            if args.mode == "kvpointer":
+                for c, i in enumerate(ent_out):
+                    preds[test[s_batch + c][5]] = deentitize(inv_word_idx[i.item()])
+            else:
+                for c, i in enumerate(idx_out):
+                    # {query_id: answer}
+                    preds[test[s_batch + c][5]] = deentitize(inv_output_idx[i.item()])
         current_correct, current_len = update_counts(current_correct, current_len, idx_out, idx_true)
     # clicr detailed evaluation
     if args.dataset == "clicr":
@@ -473,12 +595,13 @@ def main():
     arg_parser.add_argument("--lr", type=float, default=0.01, help="learning rate, default: 0.01")
     arg_parser.add_argument("--max-n-load", type=int, help="maximum number of clicr documents to use, for debugging")
     arg_parser.add_argument("--memory-size", type=int, default=50, help="upper limit on memory size, default: 50")
-    arg_parser.add_argument("--mode", type=str, default="standard", help="standard | kv")
+    arg_parser.add_argument("--mode", type=str, default="standard", help="standard | kv | kvpointer")
     arg_parser.add_argument("--multi-att-supervision", type=int, default=0)
     arg_parser.add_argument("--pretrained-output-layer", type=str,
                             help="path to the txt file with concept embeddings to use at the output layer")  # "/mnt/b5320167-5dbd-4498-bf34-173ac5338c8d/Datasets/clinical_embs/pubmed_mimic_clicr/pub_mim_cli.embeddings"
     arg_parser.add_argument("--pretrained-word-embed", type=str,
                             help="path to the txt file with word embeddings")  # "/nas/corpora/accumulate/clicr/embeddings/4bfb98c2-688e-11e7-aa74-901b0e5592c8/embeddings"
+    arg_parser.add_argument("--remove_notfound", action="store_true", help="removes all questions that don't have their answer in the passage, for all data splits")
     arg_parser.add_argument("--save-model", action="store_true")
     arg_parser.add_argument("--shuffle", action="store_true")
     arg_parser.add_argument("--task-number", type=int, default=1, help="Babi task to process, default: 1")
@@ -589,6 +712,43 @@ def main():
                 eval_network(vocab_size, story_size, k_size, model, word_idx, output_size, output_idx, test_batches_id,
                              test_data, log, logdir, args, cuda=args.cuda, test_q_ids=test_q_ids,
                              ignore_missing_preds=args.ignore_missing_preds)
+        elif args.mode == "kvpointer":
+            # load data
+            data, val_data, test_data, k_size, v_size, vocab_size, story_size, word_idx, output_size = process_data_clicr_kvpointer(
+                args, log=log)
+            if args.pretrained_word_embed:
+                log.info("Using pretrained word embeddings: {}".format(args.pretrained_word_embed))
+            else:
+                log.info("Using random initialization.")
+            # get batch indices
+            # TODO: don't leave out instances
+            n_train = len(data)
+            n_val = len(val_data)
+            n_test = len(test_data)
+            train_batches_id = list(
+                zip(range(0, n_train - args.batch_size, args.batch_size),
+                    range(args.batch_size, n_train, args.batch_size)))
+            val_batches_id = list(
+                zip(range(0, n_val - args.batch_size, args.batch_size),
+                    range(args.batch_size, n_val, args.batch_size)))
+            test_batches_id = list(
+                zip(range(0, n_test - args.batch_size, args.batch_size),
+                    range(args.batch_size, n_test, args.batch_size)))
+            if args.train == 1:
+                train_network(train_batches_id, val_batches_id, test_batches_id, data, val_data, test_data,
+                              word_idx,
+                              k_size, story_size=story_size,
+                              vocab_size=vocab_size, output_size=output_size, output_idx=None,
+                              save_model_path = save_model_path, args = args, log = log)
+                if args.eval == 1:
+                    if args.train == 1:
+                        model = save_model_path
+                    else:
+                        model = args.load_model_path
+                    eval_network(vocab_size, story_size, k_size, model, word_idx, output_size, None,
+                                 test_batches_id,
+                                 test_data, log, logdir, args, cuda=args.cuda, test_q_ids=test_q_ids,
+                                 ignore_missing_preds=args.ignore_missing_preds)
 
 
 

@@ -11,7 +11,7 @@ from util import get_position_encoding, long_tensor_type, load_emb, float_tensor
 
 
 class N2N(torch.nn.Module):
-    def __init__(self, batch_size, embed_size, vocab_size, hops, story_size, args, word_idx, output_size, output_idx):
+    def __init__(self, batch_size, embed_size, vocab_size, hops, story_size, args, word_idx, output_size, output_idx=None):
         super(N2N, self).__init__()
 
         self.embed_size = embed_size
@@ -101,7 +101,7 @@ class N2N(torch.nn.Module):
         #self.nonlin = nn.ReLU()
         #self.lin = nn.Linear(embed_size, embed_size)
 
-        #self.lin_bn = nn.BatchNorm1d(4*embed_size)
+        self.lin_bn = nn.BatchNorm1d(embed_size)
 
 
         if self.att_type == "cosine":
@@ -118,6 +118,8 @@ class N2N(torch.nn.Module):
             if torch.cuda.is_available() and args.cuda == 1:
                 self.mlp = self.mlp.cuda()
         #self.lin = nn.Linear(embed_size*4, embed_size)
+        self.nonlin=nn.ReLU()
+        self.lin = nn.Linear(embed_size, embed_size)
         self.lin_final = nn.Linear(embed_size, output_size)
         if self.pretrained_output_layer:
             self.lin_final.weight, _ = load_output_emb(args.pretrained_output_layer, self.output_idx)
@@ -181,7 +183,7 @@ class N2N(torch.nn.Module):
         #wx = self.dropout(self.lin(wx))
         # wx = self.lin2(w_u)
         # wx = self.nonlin(wx)
-        wx = self.lin_final(wx)
+        #wx = self.lin_final(wx)
         #wx = self.lin_final_bn(wx)
 
         # Final layer
@@ -407,6 +409,156 @@ class KVN2N(N2N):
         vals_variable = Variable(val_batch.data.type(long_tensor_type))
 
         return embedding_layer(vals_variable)
+
+class KVN2NPointer(N2N):
+    def forward(self, trainK, trainV, trainQ, trainPM, trainKM, trainQM, inspect, positional=True, multi_att_supervision=False):
+        """
+        """
+        K = Variable(trainK, requires_grad=False)
+        V = Variable(trainV, requires_grad=False)
+        Q = Variable(torch.squeeze(trainQ, 1), requires_grad=False)
+
+        queries = self.A1(Q)
+        #queries_emb = self.B1(Q)
+
+        if positional:
+            position_encoding = get_position_encoding(queries.size(0), queries.size(1), self.embed_size)
+            queries = queries * position_encoding
+        # zero out the masked (padded) word embeddings:
+        queries = queries * trainQM.unsqueeze(2).expand_as(queries)
+
+        queries_rep = torch.sum(queries, dim=1)
+        # w_u = queries_sum
+        # for i in range(self.hops):
+        #     w_u = self.one_hop(S, w_u, self.A[i], self.A[i + 1], self.TA[i], self.TA[i + 1])
+        if self.args.average_embs:
+            normalizer = torch.sum(trainQM, dim=1).unsqueeze(1).expand_as(queries_rep)
+            normalizer[normalizer==0.] = float("Inf")
+            queries_rep = queries_rep / normalizer
+
+        if inspect:
+            #w_u, att_probs = self.hop(S, queries_rep, self.A1, self.A2, trainPM, trainSM, inspect)  # , self.TA, self.TA2)
+            w_u, att_probs = self.hop(K, V, queries_rep, self.A1, self.A1, trainPM, trainKM, inspect, positional=positional, multi_att_supervision=multi_att_supervision)  # , self.TA, self.TA2)
+        else:
+            #w_u = self.hop(S, queries_rep, self.A1, self.A2, trainPM, trainSM, inspect)  # , self.TA, self.TA2)
+            w_u = self.hop(K, V, queries_rep, self.A1, self.A1, trainPM, trainKM, inspect, positional=positional)  # , self.TA, self.TA2)
+
+        if self.hops >= 2:
+            if inspect:
+                #w_u, att_probs = self.hop(S, w_u, self.A2, self.A3, trainPM, trainSM, inspect)  # , self.TA, self.TA3)
+                w_u, att_probs = self.hop(K, V, w_u, self.A3, self.A3, trainPM, trainKM, inspect, positional=positional, multi_att_supervision=multi_att_supervision)  # , self.TA, self.TA3)
+            else:
+                #w_u = self.hop(S, w_u, self.A2, self.A3, trainPM, trainSM, inspect)  # , self.TA, self.TA3)
+                w_u = self.hop(K, V, w_u, self.A3, self.A3, trainPM, trainKM, inspect, positional=positional)  # , self.TA, self.TA3)
+
+        if self.hops >= 3:
+            if inspect:
+                #w_u, att_probs = self.hop(S, w_u, self.A3, self.A4, trainPM, trainSM, inspect)  # , self.TA, self.TA4)
+                w_u, att_probs = self.hop(K, V, w_u, self.A4, self.A4, trainPM, trainKM, inspect, positional=positional, multi_att_supervision=multi_att_supervision)  # , self.TA, self.TA4)
+            else:
+                #w_u = self.hop(S, w_u, self.A3, self.A4, trainPM, trainSM, inspect)  # , self.TA, self.TA4)
+                w_u = self.hop(K, V, w_u, self.A4, self.A4, trainPM, trainKM, inspect, positional=positional)  # , self.TA, self.TA4)
+
+        # wx = torch.mm(w_u, self.W)
+
+
+        #wx = self.lin_bn(wx)
+        #wx = self.nonlin(wx)
+
+        wx = w_u
+        #wx = self.dropout(self.lin(wx))
+        wx = self.lin_bn(self.lin(w_u))
+        wx = self.nonlin(wx)
+        #wx = self.dropout(wx)
+        wx = self.lin_final(wx)
+        #wx = self.lin_final_bn(wx)
+
+        # Final layer
+        y_pred = wx
+        # mask for output answers
+
+        #if trainVM is not None:
+        #    y_pred = y_pred * trainVM
+        #return y_pred
+
+        y_pred_m = trainPM
+        out = masked_log_softmax(y_pred, y_pred_m)
+        if inspect:
+            return out, att_probs
+        else:
+            return out
+
+    def hop(self, trainK, trainV, u_k_1, A_k, C_k, PM, KM, inspect, positional=True, multi_att_supervision=True):  # , temp_A_k, temp_C_k):
+        mem_emb_A = self.embed_story(trainK, A_k, KM, positional=positional)  # B*S*d
+        mem_emb_C = self.embed_values(trainV, C_k)  # B*S*d
+
+        mem_emb_A_temp = mem_emb_A  # + temp_A_k
+        mem_emb_C_temp = mem_emb_C  # + temp_C_k
+
+        #u_k_1 = self.G(u_k_1)
+        u_k_1_list = [u_k_1] * self.story_size
+
+        queries_temp = torch.squeeze(torch.stack(u_k_1_list, dim=1), 2)
+        #probabs = mem_emb_A_temp * queries_temp
+        # zero out the masked (padded) sentence embeddings:
+        #probabs = probabs * PM.unsqueeze(2).expand_as(probabs)
+        #probabs = self.cos(mem_emb_A_temp, queries_temp)  # B*S
+        if self.att_type == "cosine":
+            probabs = self.cos(mem_emb_A_temp, queries_temp)  # B*S
+        elif self.att_type =="bilinear":
+            probabs = float_tensor_type(self.batch_size, self.story_size)
+            query_input = u_k_1  # non-duplicated query vector, B*d
+            story_input = mem_emb_A_temp.permute(1, 0, 2)  # mem_emb_A_temp B*S*d -> S*B*d
+            for i, s in enumerate(story_input):
+                #probabs[:, i] = self.bil(self.dropout(s), self.dropout(query_input)).squeeze(1)  # B
+                probabs[:, i] = self.bil(s, query_input).squeeze(1)  # B
+        elif self.att_type =="mlp":
+            probabs = float_tensor_type(self.batch_size, self.story_size)
+            query_input = u_k_1  # non-duplicated query vector, B*d
+            story_input = mem_emb_A_temp.permute(1,0,2)  # mem_emb_A_temp B*S*d -> S*B*d
+            for i, s in enumerate(story_input):
+                input = torch.cat((s, query_input), 1)  # -> B*2d
+                probabs[:,i] = self.mlp(input)  # B
+        if multi_att_supervision:
+            probabs = masked_sigmoid(probabs, PM)
+        else:
+            #if self.hard_att:
+                #_, max_idx = torch.max(probabs*PM, 1)
+                #_probabs = torch.zeros_like(probabs)
+                #for i in range(len(max_idx)):
+                #    _probabs[i, max_idx[i]] = 1.
+                #probabs_log = ???
+            #else:
+            probabs_log = masked_log_softmax(probabs, PM)  # B*S
+            probabs = torch.exp(probabs_log)
+            if self.hard_att:
+                _, max_idx = torch.max(probabs*PM, 1)
+                _probabs = torch.zeros_like(probabs)
+                for i in range(len(max_idx)):
+                    _probabs[i, max_idx[i]] = 1.
+                probabs = _probabs
+        mem_emb_C_temp = mem_emb_C_temp.permute(0, 2, 1)   # B*d*S
+        probabs_temp = probabs.unsqueeze(1).expand_as(mem_emb_C_temp)
+
+        pre_w = torch.mul(mem_emb_C_temp, probabs_temp)
+        o = torch.sum(pre_w, dim=2)
+
+        #u_k = torch.squeeze(o) #+ torch.squeeze(u_k_1)
+
+        #hop_o = torch.cat((o, u_k_1, o + u_k_1, o * u_k_1), dim=1)  # B*4d
+        hop_o = o + u_k_1  # B*d
+        if inspect:
+            return hop_o, probabs if multi_att_supervision else probabs_log
+
+        else:
+            return hop_o
+
+
+    def embed_values(self, val_batch, embedding_layer):
+        vals_variable = Variable(val_batch.data.type(long_tensor_type))
+
+        return embedding_layer(vals_variable)
+
 
 class KVAtt(torch.nn.Module):
     """
