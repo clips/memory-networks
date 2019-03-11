@@ -14,7 +14,7 @@ from logger import get_logger
 from net import N2N, KVN2N, KVAtt
 from util import long_tensor_type, vectorize_data_clicr, vectorized_batches, vectorize_data, evaluate_clicr, save_json, \
     get_q_ids_clicr, remove_missing_preds, deentitize, process_data_clicr_kv, vectorized_batches_kv, \
-    vectorize_data_clicr_kv
+    vectorize_data_clicr_kv, process_data_cbt_kv, process_data_cbt_win, vectorize_data_cbt_win, vectorized_batches_win
 from util import process_data, process_data_clicr
 
 
@@ -47,6 +47,9 @@ def train_network(train_batches_id, val_batches_id, test_batches_id, data, val_d
             vectorizer = vectorize_data_clicr_kv
     elif args.dataset == "babi":
         vectorizer = vectorize_data
+    elif args.dataset == "cbt":
+        if args.mode == "win":
+            vectorizer = vectorize_data_cbt_win
     else:
         raise NotImplementedError
 
@@ -61,6 +64,10 @@ def train_network(train_batches_id, val_batches_id, test_batches_id, data, val_d
             k_size = sentence_size
             train_batch_gen = vectorized_batches_kv(train_batches_id, data, word_idx, k_size, story_size,
                                                  output_size, output_idx, vectorizer, shuffle=args.shuffle)
+        elif args.mode == "win":
+            win_size = sentence_size
+            train_batch_gen = vectorized_batches_win(train_batches_id, data, word_idx, win_size, story_size,
+                                                    output_size, vectorizer, shuffle=args.shuffle)
         current_len = 0
         current_correct = 0
         for batch, (s_batch, _) in zip(train_batch_gen, train_batches_id):
@@ -89,6 +96,10 @@ def train_network(train_batches_id, val_batches_id, test_batches_id, data, val_d
             if args.mode == "kv":
                 val_acc, val_cor, val_tot = calculate_loss_and_accuracy_kv(net, val_batches_id, val_data, word_idx, sentence_size, story_size,
                                                                     output_size, output_idx, vectorizer, args.inspect, positional)
+            elif args.mode == "win":
+                val_acc, val_cor, val_tot = calculate_loss_and_accuracy_win(net, val_batches_id, val_data, word_idx,
+                                                                           sentence_size, story_size,
+                                                                           output_size, vectorizer, args.inspect)
             else:
                 val_acc, val_cor, val_tot = calculate_loss_and_accuracy(net, val_batches_id, val_data, word_idx,
                                                                     sentence_size, story_size,
@@ -189,6 +200,16 @@ def calculate_loss_and_accuracy(net, batches_id, data, word_idx, sentence_size, 
     return 100 * (current_correct / current_len), current_correct, current_len
 
 
+def calculate_loss_and_accuracy_win(net, batches_id, data, word_idx, sentence_size, story_size, output_size, vectorizer, inspect=False):
+    batch_gen = vectorized_batches_win(batches_id, data, word_idx, sentence_size, story_size, output_size, vectorizer)
+    current_len = 0
+    current_correct = 0
+    for batch in batch_gen:
+        idx_out, idx_true, out, _ = epoch(batch, net, inspect)
+        current_correct, current_len = update_counts(current_correct, current_len, idx_out, idx_true)
+    return 100 * (current_correct / current_len), current_correct, current_len
+
+
 def calculate_loss_and_accuracy_kv(net, batches_id, data, word_idx, sentence_size, story_size, output_size, output_idx, vectorizer, inspect=False, positional=False):
     batch_gen = vectorized_batches_kv(batches_id, data, word_idx, sentence_size, story_size, output_size, output_idx, vectorizer)
     current_len = 0
@@ -208,7 +229,8 @@ def eval_network(vocab_size, story_size, sentence_size, model, word_idx, output_
     else:
         net = N2N(args.batch_size, args.embed_size, vocab_size, args.hops, story_size=story_size, args=args, word_idx=word_idx, output_size=output_size)
     net.load_state_dict(torch.load(model))
-    inv_output_idx = {v: k for k, v in output_idx.items()}
+    if args.mode != "win":
+        inv_output_idx = {v: k for k, v in output_idx.items()}
     if args.inspect:
         n_inspect = 0
 
@@ -221,6 +243,9 @@ def eval_network(vocab_size, story_size, sentence_size, model, word_idx, output_
             vectorizer = vectorize_data_clicr_kv
     elif args.dataset == "babi":
         vectorizer = vectorize_data
+    elif args.dataset == "cbt":
+        if args.mode == "win":
+            vectorizer = vectorize_data_cbt_win
     else:
         raise NotImplementedError
     if args.mode == "standard":
@@ -230,6 +255,10 @@ def eval_network(vocab_size, story_size, sentence_size, model, word_idx, output_
         k_size = sentence_size
         test_batch_gen = vectorized_batches_kv(test_batches_id, test, word_idx, k_size, story_size,
                                                 output_size, output_idx, vectorizer, shuffle=args.shuffle)
+    elif args.mode == "win":
+        test_batch_gen = vectorized_batches_win(test_batches_id, test, word_idx, sentence_size, story_size, output_size,
+                                             vectorizer, shuffle=args.shuffle)
+
     current_len = 0
     current_correct = 0
     preds = {} if args.dataset == "clicr" else None
@@ -243,6 +272,8 @@ def eval_network(vocab_size, story_size, sentence_size, model, word_idx, output_
             if args.mode == "kv":
                 inspect_kv(out, idx_true, logdir, "eval", s_batch, att_probs,
                            inv_output_idx, test, args, log)
+            elif args.mode == "win":
+                raise NotImplementedError
             else:
                 inspect(out, idx_true, logdir, "eval", s_batch, att_probs,
                         inv_output_idx, test, args, log)
@@ -347,7 +378,7 @@ def main():
     arg_parser.add_argument("--cuda", type=int, default=0, help="train on GPU, default: 0")
     arg_parser.add_argument("--data-dir", type=str, default="./data/tasks_1-20_v1-2/en",
                             help="path to folder from where data is loaded")
-    arg_parser.add_argument("--dataset", type=str, help="babi or clicr")
+    arg_parser.add_argument("--dataset", type=str, help="babi | clicr | cbt")
     arg_parser.add_argument("--debug", action="store_true", help="Flag for debugging purposes")
     arg_parser.add_argument("--embed-size", type=int, default=50, help="embedding dimensions, default: 25")
     arg_parser.add_argument("--ent-setup", type=str, default="ent", help="How to treat entities in CliCR.")
@@ -366,7 +397,7 @@ def main():
     arg_parser.add_argument("--lr", type=float, default=0.01, help="learning rate, default: 0.01")
     arg_parser.add_argument("--max-n-load", type=int, help="maximum number of clicr documents to use, for debugging")
     arg_parser.add_argument("--memory-size", type=int, default=50, help="upper limit on memory size, default: 50")
-    arg_parser.add_argument("--mode", type=str, default="standard", help="standard | kv")
+    arg_parser.add_argument("--mode", type=str, default="standard", help="standard | kv | win")
     arg_parser.add_argument("--pretrained-word-embed", type=str,
                             help="path to the txt file with word embeddings")  # "/nas/corpora/accumulate/clicr/embeddings/4bfb98c2-688e-11e7-aa74-901b0e5592c8/embeddings"
     arg_parser.add_argument("--save-model", action="store_true")
@@ -379,6 +410,8 @@ def main():
     args = arg_parser.parse_args()
     if args.dataset == "clicr" and args.eval==1: # load all gold query ids in the test
         test_q_ids = get_q_ids_clicr(args.data_dir + "/test1.0.json")
+    else:
+        test_q_ids = None
     if args.eval == 1:
         args.save_model = True
     exp_dir = "./experiments/"
@@ -462,7 +495,39 @@ def main():
                     model = args.load_model_path
                 eval_network(vocab_size, story_size, k_size, model, word_idx, output_size, output_idx, test_batches_id, test_data, log, logdir, args, cuda=args.cuda, test_q_ids=test_q_ids, ignore_missing_preds=args.ignore_missing_preds)
 
-
+    elif args.dataset == "cbt":
+        if args.mode == "win":
+            # load data
+            data, val_data, test_data, sentence_size, vocab_size, story_size, word_idx = process_data_cbt_win(
+                args, log=log)
+            if args.pretrained_word_embed:
+                log.info("Using pretrained word embeddings: {}".format(args.pretrained_word_embed))
+            else:
+                log.info("Using random initialization.")
+            # get batch indices
+            # TODO: don't leave out instances
+            n_train = len(data)
+            n_val = len(val_data)
+            n_test = len(test_data)
+            train_batches_id = list(
+                zip(range(0, n_train - args.batch_size, args.batch_size), range(args.batch_size, n_train, args.batch_size)))
+            val_batches_id = list(
+                zip(range(0, n_val - args.batch_size, args.batch_size), range(args.batch_size, n_val, args.batch_size)))
+            test_batches_id = list(
+                zip(range(0, n_test - args.batch_size, args.batch_size), range(args.batch_size, n_test, args.batch_size)))
+            if args.train == 1:
+                train_network(train_batches_id, val_batches_id, test_batches_id, data, val_data, test_data, word_idx,
+                              sentence_size, story_size=story_size,
+                              vocab_size=vocab_size, output_size=vocab_size, output_idx=None,
+                              save_model_path=save_model_path, args=args, log=log)
+            if args.eval == 1:
+                if args.train == 1:
+                    model = save_model_path
+                else:
+                    model = args.load_model_path
+                eval_network(vocab_size, story_size, sentence_size, model, word_idx, vocab_size, None, test_batches_id,
+                             test_data, log, logdir, args, cuda=args.cuda, test_q_ids=test_q_ids,
+                             ignore_missing_preds=args.ignore_missing_preds)
 
     elif args.dataset == "babi":
         data, test_data, sentence_size, vocab_size, story_size, word_idx = process_data(args)

@@ -51,7 +51,7 @@ class N2N(torch.nn.Module):
         """
         # for 1 hop:
         # for >1 hop:
-        """
+
         if args.pretrained_word_embed:
             self.A2, dim = load_emb(args.pretrained_word_embed, self.word_idx, freeze=args.freeze_pretrained_word_embed)
             assert dim == self.embed_size
@@ -59,7 +59,7 @@ class N2N(torch.nn.Module):
             self.A2 = nn.Embedding(vocab_size, embed_size)
             self.A2.weight = nn.Parameter(torch.randn(vocab_size, embed_size).normal_(0, 0.1))
         # self.TA2 = nn.Parameter(torch.randn(self.batch_size, self.story_size, self.embed_size).normal_(0, 0.1))
-        """
+
         """
         # query embedding
         if args.pretrained_word_embed:
@@ -131,27 +131,27 @@ class N2N(torch.nn.Module):
             normalizer[normalizer==0.] = float("Inf")
             queries_rep = queries_rep / normalizer
         if inspect:
-            #w_u, att_probs = self.hop(S, queries_rep, self.A1, self.A2, trainPM, trainSM, inspect)  # , self.TA, self.TA2)
-            w_u, att_probs = self.hop(S, queries_rep, self.A1, self.A1, trainPM, trainSM, inspect)  # , self.TA, self.TA2)
+            w_u, att_probs = self.hop(S, queries_rep, self.A1, self.A2, trainPM, trainSM, inspect)  # , self.TA, self.TA2)
+            #w_u, att_probs = self.hop(S, queries_rep, self.A1, self.A1, trainPM, trainSM, inspect)  # , self.TA, self.TA2)
         else:
-            #w_u = self.hop(S, queries_rep, self.A1, self.A2, trainPM, trainSM, inspect)  # , self.TA, self.TA2)
-            w_u = self.hop(S, queries_rep, self.A1, self.A1, trainPM, trainSM, inspect)  # , self.TA, self.TA2)
+            w_u = self.hop(S, queries_rep, self.A1, self.A2, trainPM, trainSM, inspect)  # , self.TA, self.TA2)
+            #w_u = self.hop(S, queries_rep, self.A1, self.A1, trainPM, trainSM, inspect)  # , self.TA, self.TA2)
 
         if self.hops >= 2:
             if inspect:
-                #w_u, att_probs = self.hop(S, w_u, self.A2, self.A3, trainPM, trainSM, inspect)  # , self.TA, self.TA3)
-                w_u, att_probs = self.hop(S, w_u, self.A3, self.A3, trainPM, trainSM, inspect)  # , self.TA, self.TA3)
+                w_u, att_probs = self.hop(S, w_u, self.A2, self.A3, trainPM, trainSM, inspect)  # , self.TA, self.TA3)
+                #w_u, att_probs = self.hop(S, w_u, self.A3, self.A3, trainPM, trainSM, inspect)  # , self.TA, self.TA3)
             else:
-                #w_u = self.hop(S, w_u, self.A2, self.A3, trainPM, trainSM, inspect)  # , self.TA, self.TA3)
-                w_u = self.hop(S, w_u, self.A3, self.A3, trainPM, trainSM, inspect)  # , self.TA, self.TA3)
+                w_u = self.hop(S, w_u, self.A2, self.A3, trainPM, trainSM, inspect)  # , self.TA, self.TA3)
+                #w_u = self.hop(S, w_u, self.A3, self.A3, trainPM, trainSM, inspect)  # , self.TA, self.TA3)
 
         if self.hops >= 3:
             if inspect:
-                #w_u, att_probs = self.hop(S, w_u, self.A3, self.A4, trainPM, trainSM, inspect)  # , self.TA, self.TA4)
-                w_u, att_probs = self.hop(S, w_u, self.A4, self.A4, trainPM, trainSM, inspect)  # , self.TA, self.TA4)
+                w_u, att_probs = self.hop(S, w_u, self.A3, self.A4, trainPM, trainSM, inspect)  # , self.TA, self.TA4)
+                #w_u, att_probs = self.hop(S, w_u, self.A4, self.A4, trainPM, trainSM, inspect)  # , self.TA, self.TA4)
             else:
-                #w_u = self.hop(S, w_u, self.A3, self.A4, trainPM, trainSM, inspect)  # , self.TA, self.TA4)
-                w_u = self.hop(S, w_u, self.A4, self.A4, trainPM, trainSM, inspect)  # , self.TA, self.TA4)
+                w_u = self.hop(S, w_u, self.A3, self.A4, trainPM, trainSM, inspect)  # , self.TA, self.TA4)
+                #w_u = self.hop(S, w_u, self.A4, self.A4, trainPM, trainSM, inspect)  # , self.TA, self.TA4)
 
         # wx = torch.mm(w_u, self.W)
 
@@ -207,7 +207,7 @@ class N2N(torch.nn.Module):
         o = torch.sum(pre_w, dim=2)
 
         #u_k = torch.squeeze(o) #+ torch.squeeze(u_k_1)
-
+        #return u_k
         if inspect:
             return torch.cat((o, u_k_1, o+u_k_1, o*u_k_1), dim=1), probabs
         else:
