@@ -482,9 +482,20 @@ def cbt_stats(train, test):
 
 def load_data_cbt_win(data_dir, ent_setup, log, max_n_load=None, win_size=3):
     #train_data, _ = load_clicr_ent_only(data_dir + "train1.0.json", ent_setup, max_n_load=max_n_load)
-    train_data, _ = load_cbt_win(data_dir + "cbtest_NE_train.txt", ent_setup, max_n_load=max_n_load, win_size=win_size)
-    val_data, _ = load_cbt_win(data_dir + "cbtest_NE_valid_2000ex.txt", ent_setup, remove_notfound=False, max_n_load=max_n_load, win_size=win_size)
-    test_data, _ = load_cbt_win(data_dir + "cbtest_NE_test_2500ex.txt", ent_setup, remove_notfound=False, max_n_load=max_n_load, win_size=win_size)
+
+    #train_data_ne, _ = load_cbt_win(data_dir + "cbtest_NE_train.txt", ent_setup, max_n_load=max_n_load, win_size=win_size)
+    #train_data_cn, _ = load_cbt_win(data_dir + "cbtest_CN_train.txt", ent_setup, max_n_load=max_n_load,
+    #                                win_size=win_size)
+    #train_data_p, _ = load_cbt_win(data_dir + "cbtest_P_train.txt", ent_setup, max_n_load=max_n_load,
+    #                                win_size=win_size)
+    #train_data_v, _ = load_cbt_win(data_dir + "cbtest_V_train.txt", ent_setup, max_n_load=max_n_load,
+    #                               win_size=win_size)
+    #train_data = train_data_ne + train_data_cn + train_data_p + train_data_v
+    #np.random.seed(1234)
+    #np.random.shuffle(train_data)
+    train_data, _ = load_cbt_win(data_dir + "cbtest_CN_train.txt", ent_setup, max_n_load=max_n_load, win_size=win_size)
+    val_data, _ = load_cbt_win(data_dir + "cbtest_CN_valid_2000ex.txt", ent_setup, remove_notfound=False, max_n_load=max_n_load, win_size=win_size)
+    test_data, _ = load_cbt_win(data_dir + "cbtest_CN_test_2500ex.txt", ent_setup, remove_notfound=False, max_n_load=max_n_load, win_size=win_size)
 
     #cbt_stats(train_data, test_data)
     data = train_data + val_data + test_data  # TODO exclude test?
@@ -792,7 +803,7 @@ def read_cbt(fn, lowercase=True):
     return proc_insts
 
 
-def get_win(sent, cands, win_size=3):
+def get_win(sent, cands, win_size=3, include_cand=True):
     """
     :param sent: a list of words
     :param cands: a set of cands
@@ -801,23 +812,26 @@ def get_win(sent, cands, win_size=3):
         if w in cands:
             left = sent[max(0, c - win_size):c]
             right = sent[c + 1:c + 1 + win_size]
-            win = left + [w] + right
+            win = left + [w] + right if include_cand else left + right
 
-            yield win
+            yield win, w
 
 
-def load_cbt_win(fn, ent_setup="ent", remove_notfound=True, max_n_load=None, win_size=3):
+def load_cbt_win(fn, ent_setup="ent", remove_notfound=True, max_n_load=None, win_size=3, include_cand=True):
     questions = []
     insts = read_cbt(fn)
     relabeling_dicts = {}
     #max_mem_size = 0
     for c, inst in enumerate(insts):
         sents, q, a, cands = inst
-        wins = [win for s in sents for win in get_win(s.split(), set(cands), win_size=win_size)]
+        wins = [(win, w) for s in sents for win, w in get_win(s.split(), set(cands), win_size=win_size, include_cand=include_cand)]
         #if len(wins)> max_mem_size:
         #    max_mem_size = len(wins)
-        q_win = next(get_win(q.split(), {"xxxxx"}, win_size=win_size))
+        q_win = next(get_win(q.split(), {"xxxxx"}, win_size=win_size, include_cand=include_cand))
         cloze = q.index("xxxxx")
+        if include_cand:
+            wins = [win for win, w in wins]
+            q_win = q_win[0]
         questions.append((wins, q_win, [a], [[c] for c in cands], cloze, c))
         if max_n_load is not None and c > max_n_load:
             break

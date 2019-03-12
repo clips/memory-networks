@@ -9,6 +9,7 @@ import matplotlib as mpl
 mpl.use('Agg')
 import matplotlib.pyplot as plt
 import numpy as np
+from tqdm import tqdm
 
 from logger import get_logger
 from net import N2N, KVN2N, KVAtt
@@ -70,7 +71,8 @@ def train_network(train_batches_id, val_batches_id, test_batches_id, data, val_d
                                                     output_size, vectorizer, shuffle=args.shuffle)
         current_len = 0
         current_correct = 0
-        for batch, (s_batch, _) in zip(train_batch_gen, train_batches_id):
+        print("training...")
+        for batch, (s_batch, _) in tqdm(zip(train_batch_gen, train_batches_id), total=len(train_batches_id)):
             if args.mode == "kv":
                 idx_out, idx_true, out, att_probs = epoch_kv(batch, net, args.inspect, positional)
             else:
