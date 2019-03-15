@@ -83,7 +83,7 @@ def process_data_clicr(args, log):
 
 
 def process_data_cbt_win(args, log):
-    data, val_data, test_data, vocab = load_data_cbt_win(args.data_dir, args.ent_setup, log, args.max_n_load, args.win_size_kv)
+    data, val_data, test_data, vocab = load_data_cbt_win(args.data_dir, args.ent_setup, log, args.max_n_load, args.win_size_kv, args.dataset_part)
 
     '''
     cbt win data is of the form:
@@ -480,7 +480,7 @@ def cbt_stats(train, test):
     print("n train ans in test {} / {} all test".format(n_train_ans_in_test, n_ans_types_test))
 
 
-def load_data_cbt_win(data_dir, ent_setup, log, max_n_load=None, win_size=3):
+def load_data_cbt_win(data_dir, ent_setup, log, max_n_load=None, win_size=3, dataset_part="NE"):
     #train_data, _ = load_clicr_ent_only(data_dir + "train1.0.json", ent_setup, max_n_load=max_n_load)
 
     #train_data_ne, _ = load_cbt_win(data_dir + "cbtest_NE_train.txt", ent_setup, max_n_load=max_n_load, win_size=win_size)
@@ -493,9 +493,9 @@ def load_data_cbt_win(data_dir, ent_setup, log, max_n_load=None, win_size=3):
     #train_data = train_data_ne + train_data_cn + train_data_p + train_data_v
     #np.random.seed(1234)
     #np.random.shuffle(train_data)
-    train_data, _ = load_cbt_win(data_dir + "cbtest_CN_train.txt", ent_setup, max_n_load=max_n_load, win_size=win_size)
-    val_data, _ = load_cbt_win(data_dir + "cbtest_CN_valid_2000ex.txt", ent_setup, remove_notfound=False, max_n_load=max_n_load, win_size=win_size)
-    test_data, _ = load_cbt_win(data_dir + "cbtest_CN_test_2500ex.txt", ent_setup, remove_notfound=False, max_n_load=max_n_load, win_size=win_size)
+    train_data, _ = load_cbt_win(data_dir + "cbtest_{}_train.txt".format(dataset_part), ent_setup, max_n_load=max_n_load, win_size=win_size)
+    val_data, _ = load_cbt_win(data_dir + "cbtest_{}_valid_2000ex.txt".format(dataset_part), ent_setup, remove_notfound=False, max_n_load=max_n_load, win_size=win_size)
+    test_data, _ = load_cbt_win(data_dir + "cbtest_{}_test_2500ex.txt".format(dataset_part), ent_setup, remove_notfound=False, max_n_load=max_n_load, win_size=win_size)
 
     #cbt_stats(train_data, test_data)
     data = train_data + val_data + test_data  # TODO exclude test?

@@ -70,13 +70,16 @@ class N2N(torch.nn.Module):
             self.B2 = nn.Embedding(vocab_size, embed_size)
             self.B2.weight = nn.Parameter(torch.randn(vocab_size, embed_size).normal_(0, 0.1))
         """
-        if self.hops >= 2:
-            if args.pretrained_word_embed:
-                self.A3, dim = load_emb(args.pretrained_word_embed, self.word_idx, freeze=args.freeze_pretrained_word_embed)
-                assert dim == self.embed_size
-            else:
-                self.A3 = nn.Embedding(vocab_size, embed_size)
-                self.A3.weight = nn.Parameter(torch.randn(vocab_size, embed_size).normal_(0, 0.1))
+
+        # just use previously defined embs for self.hops==2:
+
+        #if self.hops >= 2:
+        #    if args.pretrained_word_embed:
+        #        self.A3, dim = load_emb(args.pretrained_word_embed, self.word_idx, freeze=args.freeze_pretrained_word_embed)
+        #        assert dim == self.embed_size
+        #    else:
+        #        self.A3 = nn.Embedding(vocab_size, embed_size)
+        #        self.A3.weight = nn.Parameter(torch.randn(vocab_size, embed_size).normal_(0, 0.1))
 
             # self.TA3 = nn.Parameter(torch.randn(self.batch_size, self.story_size, self.embed_size).normal_(0, 0.1))
 
@@ -90,7 +93,7 @@ class N2N(torch.nn.Module):
             # self.TA4 = nn.Parameter(torch.randn(self.batch_size, self.story_size, self.embed_size).normal_(0, 0.1))
 
 
-        #self.G =nn.Linear(embed_size, embed_size)
+        self.G =nn.Linear(embed_size, embed_size)
 
         # final weight matrix
         # self.W = nn.Parameter(torch.randn(embed_size, vocab_size), requires_grad=True)
@@ -131,27 +134,27 @@ class N2N(torch.nn.Module):
             normalizer[normalizer==0.] = float("Inf")
             queries_rep = queries_rep / normalizer
         if inspect:
-            w_u, att_probs = self.hop(S, queries_rep, self.A1, self.A2, trainPM, trainSM, inspect)  # , self.TA, self.TA2)
+            w_u, att_probs = self.hop(S, queries_rep, self.A1, self.A2, trainPM, trainSM, inspect, last_hop=self.hops == 1)  # , self.TA, self.TA2)
             #w_u, att_probs = self.hop(S, queries_rep, self.A1, self.A1, trainPM, trainSM, inspect)  # , self.TA, self.TA2)
         else:
-            w_u = self.hop(S, queries_rep, self.A1, self.A2, trainPM, trainSM, inspect)  # , self.TA, self.TA2)
+            w_u = self.hop(S, queries_rep, self.A1, self.A2, trainPM, trainSM, inspect, last_hop=self.hops == 1)  # , self.TA, self.TA2)
             #w_u = self.hop(S, queries_rep, self.A1, self.A1, trainPM, trainSM, inspect)  # , self.TA, self.TA2)
 
         if self.hops >= 2:
             if inspect:
-                w_u, att_probs = self.hop(S, w_u, self.A2, self.A3, trainPM, trainSM, inspect)  # , self.TA, self.TA3)
+                w_u, att_probs = self.hop(S, w_u, self.A1, self.A2, trainPM, trainSM, inspect, last_hop=self.hops == 1)  # , self.TA, self.TA3)
                 #w_u, att_probs = self.hop(S, w_u, self.A3, self.A3, trainPM, trainSM, inspect)  # , self.TA, self.TA3)
             else:
-                w_u = self.hop(S, w_u, self.A2, self.A3, trainPM, trainSM, inspect)  # , self.TA, self.TA3)
+                w_u = self.hop(S, w_u, self.A1, self.A2, trainPM, trainSM, inspect, last_hop=self.hops == 1)  # , self.TA, self.TA3)
                 #w_u = self.hop(S, w_u, self.A3, self.A3, trainPM, trainSM, inspect)  # , self.TA, self.TA3)
 
-        if self.hops >= 3:
-            if inspect:
-                w_u, att_probs = self.hop(S, w_u, self.A3, self.A4, trainPM, trainSM, inspect)  # , self.TA, self.TA4)
-                #w_u, att_probs = self.hop(S, w_u, self.A4, self.A4, trainPM, trainSM, inspect)  # , self.TA, self.TA4)
-            else:
-                w_u = self.hop(S, w_u, self.A3, self.A4, trainPM, trainSM, inspect)  # , self.TA, self.TA4)
-                #w_u = self.hop(S, w_u, self.A4, self.A4, trainPM, trainSM, inspect)  # , self.TA, self.TA4)
+        #if self.hops >= 3:
+        #    if inspect:
+        #        w_u, att_probs = self.hop(S, w_u, self.A3, self.A4, trainPM, trainSM, inspect)  # , self.TA, self.TA4)
+        #        #w_u, att_probs = self.hop(S, w_u, self.A4, self.A4, trainPM, trainSM, inspect)  # , self.TA, self.TA4)
+        #    else:
+        #        w_u = self.hop(S, w_u, self.A3, self.A4, trainPM, trainSM, inspect)  # , self.TA, self.TA4)
+        #        #w_u = self.hop(S, w_u, self.A4, self.A4, trainPM, trainSM, inspect)  # , self.TA, self.TA4)
 
         # wx = torch.mm(w_u, self.W)
 
@@ -182,7 +185,7 @@ class N2N(torch.nn.Module):
         else:
             return out
 
-    def hop(self, trainS, u_k_1, A_k, C_k, PM, SM, inspect):  # , temp_A_k, temp_C_k):
+    def hop(self, trainS, u_k_1, A_k, C_k, PM, SM, inspect, last_hop):  # , temp_A_k, temp_C_k):
         mem_emb_A = self.embed_story(trainS, A_k, SM)
         mem_emb_C = self.embed_story(trainS, C_k, SM)
 
@@ -208,10 +211,13 @@ class N2N(torch.nn.Module):
 
         #u_k = torch.squeeze(o) #+ torch.squeeze(u_k_1)
         #return u_k
-        if inspect:
-            return torch.cat((o, u_k_1, o+u_k_1, o*u_k_1), dim=1), probabs
+        if last_hop:
+            if inspect:
+                return torch.cat((o, u_k_1, o+u_k_1, o*u_k_1), dim=1), probabs
+            else:
+                return torch.cat((o, u_k_1, o+u_k_1, o*u_k_1), dim=1)
         else:
-            return torch.cat((o, u_k_1, o+u_k_1, o*u_k_1), dim=1)
+            return torch.squeeze(self.G(o)) + torch.squeeze(u_k_1)
 
     def embed_story(self, story_batch, embedding_layer, sent_mask, positional=True):
         story_embedding_list = []

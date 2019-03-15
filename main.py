@@ -1,4 +1,5 @@
 import argparse
+import sys
 from datetime import datetime
 import os
 
@@ -381,6 +382,7 @@ def main():
     arg_parser.add_argument("--data-dir", type=str, default="./data/tasks_1-20_v1-2/en",
                             help="path to folder from where data is loaded")
     arg_parser.add_argument("--dataset", type=str, help="babi | clicr | cbt")
+    arg_parser.add_argument("--dataset-part", type=str, help="For CBT dataset, which part to train and test on: NE | CN | V | P")
     arg_parser.add_argument("--debug", action="store_true", help="Flag for debugging purposes")
     arg_parser.add_argument("--embed-size", type=int, default=50, help="embedding dimensions, default: 25")
     arg_parser.add_argument("--ent-setup", type=str, default="ent", help="How to treat entities in CliCR.")
@@ -498,6 +500,8 @@ def main():
                 eval_network(vocab_size, story_size, k_size, model, word_idx, output_size, output_idx, test_batches_id, test_data, log, logdir, args, cuda=args.cuda, test_q_ids=test_q_ids, ignore_missing_preds=args.ignore_missing_preds)
 
     elif args.dataset == "cbt":
+        if args.dataset_part not in {"NE","CN","V","P"}:
+            sys.exit("Invalid dataset part specified for CBT.")
         if args.mode == "win":
             # load data
             data, val_data, test_data, sentence_size, vocab_size, story_size, word_idx = process_data_cbt_win(
