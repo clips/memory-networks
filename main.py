@@ -48,7 +48,10 @@ def train_network(train_batches_id, val_batches_id, test_batches_id, data, val_d
         elif args.mode == "kv":
             vectorizer = vectorize_data_clicr_kv
     elif args.dataset == "babi":
-        vectorizer = vectorize_data
+        if args.mode == "win":
+            vectorizer = vectorize_data_cbt_win
+        else:
+            vectorizer = vectorize_data
     elif args.dataset == "cbt":
         if args.mode == "win":
             vectorizer = vectorize_data_cbt_win
@@ -245,7 +248,10 @@ def eval_network(vocab_size, story_size, sentence_size, model, word_idx, output_
         elif args.mode == "kv":
             vectorizer = vectorize_data_clicr_kv
     elif args.dataset == "babi":
-        vectorizer = vectorize_data
+        if args.mode == "win":
+            vectorizer = vectorize_data_cbt_win
+        else:
+            vectorizer = vectorize_data
     elif args.dataset == "cbt":
         if args.mode == "win":
             vectorizer = vectorize_data_cbt_win
@@ -379,7 +385,7 @@ def main():
     arg_parser.add_argument("--average-embs", type=int, default=1, help="Flag to average context embs instead of summing.")
     arg_parser.add_argument("--batch-size", type=int, default=32, help="batch size for training, default: 32")
     arg_parser.add_argument("--cuda", type=int, default=0, help="train on GPU, default: 0")
-    arg_parser.add_argument("--data-dir", type=str, default="./data/tasks_1-20_v1-2/en",
+    arg_parser.add_argument("--data-dir", type=str, default="./data/en",
                             help="path to folder from where data is loaded")
     arg_parser.add_argument("--dataset", type=str, help="babi | clicr | cbt")
     arg_parser.add_argument("--dataset-part", type=str, help="For CBT dataset, which part to train and test on: NE | CN | V | P")
@@ -388,6 +394,7 @@ def main():
     arg_parser.add_argument("--ent-setup", type=str, default="ent", help="How to treat entities in CliCR.")
     arg_parser.add_argument("--epochs", type=int, default=100, help="number of training epochs, default: 100")
     arg_parser.add_argument("--eval", type=int, default=1, help="evaluate after training, default: 1")
+    arg_parser.add_argument("--exclude-unseen-ans", type=int, default=0)
     arg_parser.add_argument("--freeze-pretrained-word-embed", action="store_true",
                             help="will prevent the pretrained word embeddings from being updated")
     arg_parser.add_argument("--hops", type=int, default=1, help="Number of hops to make: 1, 2 or 3; default: 1 ")
@@ -406,7 +413,7 @@ def main():
                             help="path to the txt file with word embeddings")  # "/nas/corpora/accumulate/clicr/embeddings/4bfb98c2-688e-11e7-aa74-901b0e5592c8/embeddings"
     arg_parser.add_argument("--save-model", action="store_true")
     arg_parser.add_argument("--shuffle", action="store_true")
-    arg_parser.add_argument("--task-number", type=int, default=1, help="Babi task to process, default: 1")
+    arg_parser.add_argument("--task-number", type=int, default=19, help="Babi task to process, default: 19 path finding")
     arg_parser.add_argument("--train", type=int, default=1)
     arg_parser.add_argument("--win-size-kv", type=int, default=3, help="Size of the key window for one side.")
 
@@ -536,28 +543,31 @@ def main():
                              ignore_missing_preds=args.ignore_missing_preds)
 
     elif args.dataset == "babi":
-        data, test_data, sentence_size, vocab_size, story_size, word_idx = process_data(args)
+        data, val_data, test_data, sentence_size, vocab_size, story_size, word_idx = process_data(args, log=log)
         # get batch indices
         # TODO: don't leave out instances
         n_train = len(data)
+        n_val = len(val_data)
         n_test = len(test_data)
         train_batches_id = list(zip(range(0, n_train - args.batch_size, args.batch_size),
                                     range(args.batch_size, n_train, args.batch_size)))
+        val_batches_id = list(zip(range(0, n_val - args.batch_size, args.batch_size),
+                                   range(args.batch_size, n_val, args.batch_size)))
         test_batches_id = list(zip(range(0, n_test - args.batch_size, args.batch_size),
                                    range(args.batch_size, n_test, args.batch_size)))
-
         if args.train == 1:
             print("dbg: for babi val=test")
-            train_network(train_batches_id, test_batches_id, test_batches_id, data, test_data, test_data, word_idx,
+            train_network(train_batches_id, val_batches_id, test_batches_id, data, val_data, test_data, word_idx,
                           sentence_size, story_size=story_size,
-                          vocab_size=vocab_size, save_model_path=save_model_path, args=args, log=log)
+                          vocab_size=vocab_size, output_size=vocab_size, output_idx=None, save_model_path=save_model_path, args=args, log=log)
 
         if args.eval == 1:
             if args.train == 1:
                 model = save_model_path
             else:
                 model = args.load_model_path
-            eval_network(vocab_size, story_size, sentence_size, model, word_idx, test_batches_id, test_data, log, logdir, args, cuda=args.cuda)
+            eval_network(vocab_size, story_size, sentence_size, model, word_idx, vocab_size, None, test_batches_id,
+                         test_data, log, logdir, args, cuda=args.cuda)
     else:
         raise ValueError
 

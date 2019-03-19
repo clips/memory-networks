@@ -83,7 +83,7 @@ def process_data_clicr(args, log):
 
 
 def process_data_cbt_win(args, log):
-    data, val_data, test_data, vocab = load_data_cbt_win(args.data_dir, args.ent_setup, log, args.max_n_load, args.win_size_kv, args.dataset_part)
+    data, val_data, test_data, vocab = load_data_cbt_win(args.data_dir, args.ent_setup, log, args.max_n_load, args.win_size_kv, args.dataset_part, args.exclude_unseen_ans)
 
     '''
     cbt win data is of the form:
@@ -418,9 +418,7 @@ def remove_concept_marks(txt, marker1="BEG__", marker2="__END"):
 
 
 def process_data(args, log):
-    test_size = .1
-    random_state = None
-    data, test_data, vocab = load_data(args.data_dir, args.joint_training, args.task_number)
+    data, val_data, test_data, vocab = load_data(args.data_dir, args.joint_training, args.task_number)
 
     '''
     data is of the form:
@@ -444,7 +442,7 @@ def process_data(args, log):
                                                                                   memory_size=args.memory_size,
                                                                                   vocab=vocab, log=log)
 
-    return data, test_data, sentence_size, vocab_size, memory_size, word_idx
+    return data, val_data, test_data, sentence_size, vocab_size, memory_size, word_idx
 
 
 def load_data_clicr(data_dir, ent_setup, log, max_n_load=None):
@@ -475,12 +473,23 @@ def cbt_stats(train, test):
 
     n_train_ans_in_test = len(set(ans_train) & set(ans_test))
 
-    print("train: n ans tok {} types {} ration {}".format(n_ans_test, n_ans_types_test, n_ans_types_test / n_ans_test))
-    print("test: n ans tok {} types {} ration {}".format(n_ans_train, n_ans_types_train, n_ans_types_train / n_ans_train))
+    print("test: n ans tok {} types {} ration {}".format(n_ans_test, n_ans_types_test, n_ans_types_test / n_ans_test))
+    print("train: n ans tok {} types {} ration {}".format(n_ans_train, n_ans_types_train, n_ans_types_train / n_ans_train))
     print("n train ans in test {} / {} all test".format(n_train_ans_in_test, n_ans_types_test))
 
 
-def load_data_cbt_win(data_dir, ent_setup, log, max_n_load=None, win_size=3, dataset_part="NE"):
+def prune_test(train_data, test_data):
+    ans_train = {i[2][0] for i in train_data}
+    print("ans train len: {}".format(len(ans_train)))
+
+    new_test_data = []
+    for i in test_data:
+        if i[2][0] in ans_train:
+            new_test_data.append(i)
+
+    return new_test_data
+
+def load_data_cbt_win(data_dir, ent_setup, log, max_n_load=None, win_size=3, dataset_part="NE", exclude_unseen_ans=False):
     #train_data, _ = load_clicr_ent_only(data_dir + "train1.0.json", ent_setup, max_n_load=max_n_load)
 
     #train_data_ne, _ = load_cbt_win(data_dir + "cbtest_NE_train.txt", ent_setup, max_n_load=max_n_load, win_size=win_size)
@@ -497,7 +506,10 @@ def load_data_cbt_win(data_dir, ent_setup, log, max_n_load=None, win_size=3, dat
     val_data, _ = load_cbt_win(data_dir + "cbtest_{}_valid_2000ex.txt".format(dataset_part), ent_setup, remove_notfound=False, max_n_load=max_n_load, win_size=win_size)
     test_data, _ = load_cbt_win(data_dir + "cbtest_{}_test_2500ex.txt".format(dataset_part), ent_setup, remove_notfound=False, max_n_load=max_n_load, win_size=win_size)
 
-    #cbt_stats(train_data, test_data)
+    if exclude_unseen_ans:
+        test_data = prune_test(train_data, test_data)
+
+    cbt_stats(train_data, test_data)
     data = train_data + val_data + test_data  # TODO exclude test?
 
     vocab_set = set()
@@ -899,11 +911,14 @@ def load_data(data_dir, joint_training, task_number):
         test_data += task_test
         start_task += 1
 
-    data = train_data + test_data
+    np.random.shuffle(train_data)
+    val_size = int(len(train_data)*0.1)
+    val_data, train_data = train_data[:val_size], train_data[val_size:]
+    data = train_data + val_data + test_data
 
-    vocab = sorted(reduce(lambda x, y: x | y, (set(list(chain.from_iterable(s)) + q + a) for s, q, a in data)))
+    vocab = sorted(reduce(lambda x, y: x | y, (set(list(chain.from_iterable(s)) + q + a) for s, q, a, _, _, _ in data)))
 
-    return train_data, test_data, vocab
+    return train_data, val_data, test_data, vocab
 
 
 def load_data_kv(data_dir, joint_training, task_number, win_size):
@@ -1001,7 +1016,7 @@ def parse_stories(lines, only_supporting=False, kv=False, win_size=3):
                 else:
                     substory = [x for x in story if x]
 
-            data.append((substory, q, a))
+            data.append((substory, q, a, None, None, None))
             story.append('')
         else:  # regular sentence
             # remove periods
@@ -1023,10 +1038,10 @@ def tokenize(sent):
 
 def calculate_parameter_values(data, debug, memory_size, vocab, log):
     word_idx = dict((c, i + 1) for i, c in enumerate(vocab))
-    max_story_size = max(map(len, (s for s, _, _ in data)))
-    mean_story_size = int(np.mean(list(map(len, (s for s, _, _ in data)))))
-    sentence_size = max(map(len, chain.from_iterable(s for s, _, _ in data)))
-    query_size = max(map(len, (q for _, q, _ in data)))
+    max_story_size = max(map(len, (s for s, _, _, _, _, _ in data)))
+    mean_story_size = int(np.mean(list(map(len, (s for s, _, _, _, _, _ in data)))))
+    sentence_size = max(map(len, chain.from_iterable(s for s, _, _, _, _, _ in data)))
+    query_size = max(map(len, (q for _, q, _, _, _, _ in data)))
     memory_size = min(memory_size, max_story_size)
     vocab_size = len(word_idx) + 1  # +1 for nil word
     sentence_size = max(query_size, sentence_size)  # for the position
@@ -1577,20 +1592,6 @@ def vectorize_data_kvatt(data, word_idx, output_size, output_idx, k_size, memory
 
 def vectorize_data_cbt_win(data, word_idx, output_size, win_size, memory_size):
     '''
-    Vectorize stories (into keys and values) and queries.
-
-    If a key/value length < key/value_size, it will be padded with 0's.
-
-    If a story length < memory_size, the story will be padded with empty memories.
-    Empty memories are 1-D arrays of length sentence_size filled with 0's.
-
-    The answer array is returned as a one-hot encoding.
-
-    vocab_mask marks which elements (=words/entities) in V are found in the particular document
-
-    We also keep track of lengths of passages (=keys), keys, values and queries, so that we can mask during
-    vectorization the padded parts and ignore them in computation
-
     '''
     W = []
     Q = []
@@ -1673,7 +1674,11 @@ def vectorized_batches(batches, data, word_idx, sentence_size, memory_size, outp
     if shuffle:
         np.random.shuffle(batches)
     for s_batch, e_batch in batches:
-        dataS, dataQ, dataA, dataVM, dataPM, dataSM, dataQM = vectorizer(data[s_batch:e_batch], word_idx, output_size, output_idx, sentence_size, memory_size)
+        if vectorizer==vectorize_data:
+            dataS, dataQ, dataA, dataVM, dataPM, dataSM, dataQM = vectorizer(data[s_batch:e_batch], word_idx, sentence_size, memory_size)
+        else:
+            dataS, dataQ, dataA, dataVM, dataPM, dataSM, dataQM = vectorizer(data[s_batch:e_batch], word_idx, output_size, output_idx, sentence_size, memory_size)
+
         dataA, dataQ, dataS, dataVM, dataPM, dataSM, dataQM = extract_tensors(dataA, dataQ, dataS, dataVM, dataPM, dataSM, dataQM)
 
         yield [list(dataS),

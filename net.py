@@ -92,8 +92,8 @@ class N2N(torch.nn.Module):
                 self.A4.weight = nn.Parameter(torch.randn(vocab_size, embed_size).normal_(0, 0.1))
             # self.TA4 = nn.Parameter(torch.randn(self.batch_size, self.story_size, self.embed_size).normal_(0, 0.1))
 
-
-        self.G =nn.Linear(embed_size, embed_size)
+        if self.hops > 1:
+            self.G =nn.Linear(embed_size, embed_size)
 
         # final weight matrix
         # self.W = nn.Parameter(torch.randn(embed_size, vocab_size), requires_grad=True)
