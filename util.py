@@ -3,6 +3,7 @@ import json
 import os
 import re
 import subprocess
+from collections import Counter
 from functools import reduce
 from itertools import chain
 from tqdm import tqdm
@@ -80,6 +81,41 @@ def process_data_clicr(args, log):
         log.info("Output Size: {}".format(output_size))
 
     return data, val_data, test_data, sentence_size, vocab_size, memory_size, word_idx, output_size, output_idx
+
+def process_data_clicr_win(args, log):
+    data, val_data, test_data, vocab = load_data_clicr_win(args.data_dir, args.ent_setup, log, args.max_n_load, args.win_size_kv, args.exclude_unseen_ans, args.max_vocab_size)
+
+    '''
+    clicr data is of the form:
+    [
+        (
+            [
+                ['passage_w1', 'passage_w2', ...], 
+                ['passage_w1', 'passage_w2', ...],
+                ...
+            ], 
+            ['q_w1', 'q_w2', ...], 
+            ['answer'],
+            [
+                ['cand_answer1'],
+                ['cand_answer2']
+            ],
+            cloze_start_id,
+            'query_id'
+        ),
+        .
+        .
+        .
+        ()
+    ]
+    '''
+    memory_size, sentence_size, vocab_size, word_idx = calculate_parameter_values_clicr_win(data=data, debug=args.debug,
+                                                                                        memory_size=args.memory_size,
+                                                                                        vocab=vocab, log=log)
+    if args.debug:
+        log.info("Vocabulary Size: {}".format(vocab_size))
+
+    return data, val_data, test_data, sentence_size, vocab_size, memory_size, word_idx
 
 
 def process_data_cbt_win(args, log):
@@ -205,6 +241,51 @@ def process_data_kv(args, log):
         log.info("Vocabulary Size: {}".format(vocab_size))
 
     return data, test_data, k_size, v_size, vocab_size, memory_size, word_idx
+
+def load_clicr_win(fn, ent_setup="ent", remove_notfound=True, max_n_load=None, win_size=3):
+    questions = []
+    raw = load_json(fn)
+    for c, datum in enumerate(raw[DATA_KEY]):
+        doc_txt = datum[DOC_KEY][TITLE_KEY] + "\n" + datum[DOC_KEY][CONTEXT_KEY]
+        # keys include values
+        keys, values = prepare_win(doc_txt, win_size=win_size)  # n_words*d
+        assert len(keys) == len(values)
+
+        sents = []
+        for sent in doc_txt.split("\n"):
+            if sent:
+                sents.append(to_entities(sent))
+        document = " ".join(sents)
+
+        for qa in datum[DOC_KEY][QAS_KEY]:
+            doc_raw = document.split()
+            query_id = qa[ID_KEY]
+            query = qa[QUERY_KEY]
+            query_win = prepare_q_for_kv(query, win_size=win_size)
+            ans_raw = ""
+            for ans in qa[ANS_KEY]:
+                if ans[ORIG_KEY] == "dataset":
+                    ans_raw = ("@entity" + "_".join(ans[TXT_KEY].split())).lower()
+            assert ans_raw
+            if remove_notfound:  # should be always false for dev and test
+                if ans_raw not in doc_raw:
+                    found_umls = False
+                    for ans in qa[ANS_KEY]:
+                        if ans[ORIG_KEY] == "UMLS":
+                            umls_answer = ("@entity" + "_".join(ans[TXT_KEY].split())).lower()
+                            if umls_answer in doc_raw:
+                                found_umls = True
+                                ans_raw = umls_answer
+                    if not found_umls:
+                        continue
+            cand_e = [w.lower() for w in doc_raw if w.startswith('@entity')]
+            cand_raw = [[e] for e in cand_e]
+            questions.append((keys, query_win, [ans_raw], cand_raw, None, query_id))
+        if max_n_load is not None and c > max_n_load:
+            break
+
+    return questions
+
 
 
 def load_clicr_kv(fn, ent_setup="ent", win_size=3, remove_notfound=True, max_n_load=None):
@@ -380,6 +461,40 @@ def prepare_kv(text, win_size=3):
     return keys, values
 
 
+def prepare_win(text, win_size=3):
+    values = []
+    keys = []  # n_words*(2*win_size)
+    for line in text.split("\n"):
+        idxs_start = [match.start() for match in re.finditer("BEG__", line)]
+        idxs_end = [match.end() for match in re.finditer("__END", line)]
+        for i_start, i_end in zip(idxs_start, idxs_end):
+            concept = line[i_start + len("BEG__"):i_end - len("__END")]
+            concept = "@entity" + concept.replace(" ", "_").lower()
+            txt_left = line[:i_start].strip()
+            lst_left = txt_left.split()
+            txt_right = line[i_end:].strip()
+            lst_right = txt_right.split()
+            lst = lst_left + lst_right
+            i = len(lst_left)
+            window_start = max(0, i - win_size)
+            window_end = min(len(lst), i + win_size)
+            contexts = []
+            # go over contexts
+            for j in range(window_start, window_end):
+                w = lst[j]
+                w = remove_concept_marks(w)
+                contexts.append(w.lower())
+            contexts.append(concept)
+            if not contexts:
+                continue
+            values.append(concept)
+            keys.append(contexts)
+
+    assert len(values) > 0
+
+    return keys, values
+
+
 def prepare_kv_ent_only(text, win_size=3):
     values = []
     keys = []  # n_words*(2*win_size)
@@ -488,6 +603,41 @@ def prune_test(train_data, test_data):
             new_test_data.append(i)
 
     return new_test_data
+
+def load_data_clicr_win(data_dir, ent_setup, log, max_n_load=None, win_size=3, exclude_unseen_ans=False, max_vocab_size=1e50):
+    #train_data, _ = load_clicr_ent_only(data_dir + "train1.0.json", ent_setup, max_n_load=max_n_load)
+
+    #train_data_ne, _ = load_cbt_win(data_dir + "cbtest_NE_train.txt", ent_setup, max_n_load=max_n_load, win_size=win_size)
+    #train_data_cn, _ = load_cbt_win(data_dir + "cbtest_CN_train.txt", ent_setup, max_n_load=max_n_load,
+    #                                win_size=win_size)
+    #train_data_p, _ = load_cbt_win(data_dir + "cbtest_P_train.txt", ent_setup, max_n_load=max_n_load,
+    #                                win_size=win_size)
+    #train_data_v, _ = load_cbt_win(data_dir + "cbtest_V_train.txt", ent_setup, max_n_load=max_n_load,
+    #                               win_size=win_size)
+    #train_data = train_data_ne + train_data_cn + train_data_p + train_data_v
+    #np.random.seed(1234)
+    #np.random.shuffle(train_data)
+    train_data = load_clicr_win(data_dir + "train1.0.json", ent_setup, remove_notfound=True, max_n_load=max_n_load, win_size=win_size)
+    val_data = load_clicr_win(data_dir + "dev1.0.json", ent_setup, remove_notfound=False, max_n_load=max_n_load, win_size=win_size)
+    test_data = load_clicr_win(data_dir + "test1.0.json", ent_setup, remove_notfound=False, max_n_load=max_n_load, win_size=win_size)
+
+    if exclude_unseen_ans:
+        test_data = prune_test(train_data, test_data)
+
+    cbt_stats(train_data, test_data)
+    data = train_data + val_data + test_data  # TODO exclude test?
+
+    #vocab_set = set()
+    #for s, q, a, _, _, _ in data:
+    #    vocab_set.update([w for sent in s for w in sent] + q + a)
+    vocab_cnt = Counter()
+    for s, q, a, _, _, _ in data:
+        vocab_cnt.update([w for sent in s for w in sent] + q + a)
+    
+    #vocab = sorted(vocab_set)
+    vocab = sorted([w for w,f in vocab_cnt.most_common(max_vocab_size)] + ["_UNK_"])
+
+    return train_data, val_data, test_data, vocab
 
 def load_data_cbt_win(data_dir, ent_setup, log, max_n_load=None, win_size=3, dataset_part="NE", exclude_unseen_ans=False):
     #train_data, _ = load_clicr_ent_only(data_dir + "train1.0.json", ent_setup, max_n_load=max_n_load)
@@ -1094,6 +1244,23 @@ def calculate_parameter_values_clicr(data, debug, memory_size, vocab, log):
     return memory_size, sentence_size, vocab_size, word_idx, output_size, output_idx
 
 
+def calculate_parameter_values_clicr_win(data, debug, memory_size, vocab, log):
+    word_idx = dict((c, i + 1) for i, c in enumerate(vocab))
+    max_story_size = max(map(len, (s for s, _, _, _, _, _ in data)))
+    mean_story_size = int(np.mean(list(map(len, (s for s, _, _, _, _, _ in data)))))
+    sentence_size = max(map(len, chain.from_iterable(s for s, _, _, _, _, _ in data)))
+    query_size = max(map(len, (q for _, q, _, _, _, _ in data)))
+    memory_size = min(memory_size, max_story_size)
+    vocab_size = len(word_idx) + 1  # +1 for nil word
+    sentence_size = max(query_size, sentence_size)  # for the position
+    if debug is True:
+        log.info("Longest sentence length: {}".format(sentence_size))
+        log.info("Longest story length: {}".format(max_story_size))
+        log.info("Average story length: {}".format(mean_story_size))
+        log.info("Average memory size: {}".format(memory_size))
+    return memory_size, sentence_size, vocab_size, word_idx
+
+
 def calculate_parameter_values_cbt_win(data, debug, memory_size, vocab, log):
     word_idx = dict((c, i + 1) for i, c in enumerate(vocab))
     #output_idx = dict()
@@ -1651,6 +1818,83 @@ def vectorize_data_cbt_win(data, word_idx, output_size, win_size, memory_size):
         QM.append(np.clip(np.array(q), 0., 1.))
 
     return np.array(W), np.array(Q), np.array(A), np.array(VM), np.array(PM), np.array(WM), np.array(QM)
+
+
+def vectorize_data_clicr_win(data, word_idx, output_size, win_size, memory_size, top_k_cand=10):
+    '''
+    '''
+    W = []
+    Q = []
+    A = []
+    VM = []  # vocabulary mask
+    PM = []  # passage mask
+    WM = []  # window mask
+    QM = []  # query mask
+    inv_w_idx = {v: k for k, v in word_idx.items()}
+
+    for wins, query, answer, _, _, _ in data:
+        lq = max(0, win_size - len(query))
+        q = [word_idx.get(w, word_idx["_UNK_"]) for w in query] + [0] * lq
+
+        ws = []
+        for win in wins:
+            ls = max(0, win_size - len(win))
+            sent = [word_idx.get(w, word_idx["_UNK_"]) for w in win] + [0] * ls  # TODO pad zeros where truly missing, not only at end
+            if len(sent) > win_size:  # can happen in test/val as sentence_size is calculated on train
+                sent = sent[:win_size]
+            ws.append(sent)
+
+        if len(ws) > memory_size:
+            # TODO this is currently problematic as it relies on simple word match
+            # Use Jaccard similarity to determine the most relevant sentences
+            q_words = (q)
+            least_like_q = sorted(ws, key=functools.cmp_to_key(
+                lambda x, y: jaccard_similarity_score((x), q_words) < jaccard_similarity_score((y), q_words)))[
+                           :len(ws) - memory_size]
+            for sent in least_like_q:
+                # Remove the first occurrence of sent. A list comprehension as in [sent for sent in ss if sent not in least_like_q]
+                # should not be used, as it would remove multiple occurrences of the same sentence, some of which might actually make the cutoff.
+                del_id = ws.index(sent)
+                del ws[del_id]
+            p_m = [1.] * memory_size
+        else:
+            # pad to memory_size
+            lm = max(0, memory_size - len(ws))
+            p_m = [1.] * len(ws) + [0.] * lm
+            for _ in range(lm):
+                ws.append([0] * win_size)
+        y = np.zeros(output_size)
+        for a in answer:
+            y[word_idx.get(a, word_idx["_UNK_"])] = 1
+
+        vm = np.zeros_like(y)
+
+        #vs_voc = set(np.array(ws).flatten())
+        #TODO allow _UNK_ as the answer?--
+        vs_voc = {i for i in set(np.array(ws).flatten()) if i!=0 and (inv_w_idx[i].startswith("@entity") or inv_w_idx[i] == "_UNK_")}
+
+        if top_k_cand is not None:
+            eff_top_k = top_k_cand
+            a = word_idx.get(a, word_idx["_UNK_"])
+            if a in vs_voc:
+                vs_voc.remove(a)
+                eff_top_k = eff_top_k - 1
+            if len(vs_voc) > eff_top_k:
+                vs_voc = np.random.choice(list(vs_voc), eff_top_k, replace=False)
+                vs_voc = np.concatenate((vs_voc, np.array([a])))
+
+        vm[list(vs_voc)] = 1.
+
+        W.append(ws)
+        Q.append(q)
+        A.append(y)
+        VM.append(vm)
+        PM.append(p_m)
+        WM = np.clip(np.array(W), 0., 1.)
+        QM.append(np.clip(np.array(q), 0., 1.))
+
+    return np.array(W), np.array(Q), np.array(A), np.array(VM), np.array(PM), np.array(WM), np.array(QM)
+
 
 
 def generate_batches(batches_tr, batches_v, batches_te, train, val, test):

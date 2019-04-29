@@ -16,7 +16,8 @@ from logger import get_logger
 from net import N2N, KVN2N, KVAtt
 from util import long_tensor_type, vectorize_data_clicr, vectorized_batches, vectorize_data, evaluate_clicr, save_json, \
     get_q_ids_clicr, remove_missing_preds, deentitize, process_data_clicr_kv, vectorized_batches_kv, \
-    vectorize_data_clicr_kv, process_data_cbt_kv, process_data_cbt_win, vectorize_data_cbt_win, vectorized_batches_win
+    vectorize_data_clicr_kv, process_data_cbt_kv, process_data_cbt_win, vectorize_data_cbt_win, vectorized_batches_win, \
+    process_data_clicr_win, vectorize_data_clicr_win
 from util import process_data, process_data_clicr
 
 
@@ -47,6 +48,8 @@ def train_network(train_batches_id, val_batches_id, test_batches_id, data, val_d
             vectorizer = vectorize_data_clicr
         elif args.mode == "kv":
             vectorizer = vectorize_data_clicr_kv
+        elif args.mode =="win":
+            vectorizer = vectorize_data_clicr_win
     elif args.dataset == "babi":
         if args.mode == "win":
             vectorizer = vectorize_data_cbt_win
@@ -237,6 +240,8 @@ def eval_network(vocab_size, story_size, sentence_size, model, word_idx, output_
     net.load_state_dict(torch.load(model))
     if args.mode != "win":
         inv_output_idx = {v: k for k, v in output_idx.items()}
+    elif args.mode == "win" and args.dataset == "clicr":
+        inv_output_idx = {v: k for k, v in word_idx.items()}
     if args.inspect:
         n_inspect = 0
 
@@ -247,6 +252,8 @@ def eval_network(vocab_size, story_size, sentence_size, model, word_idx, output_
             vectorizer = vectorize_data_clicr
         elif args.mode == "kv":
             vectorizer = vectorize_data_clicr_kv
+        elif args.mode == "win":
+            vectorizer = vectorize_data_clicr_win
     elif args.dataset == "babi":
         if args.mode == "win":
             vectorizer = vectorize_data_cbt_win
@@ -290,7 +297,10 @@ def eval_network(vocab_size, story_size, sentence_size, model, word_idx, output_
         if preds is not None:
             for c, i in enumerate(idx_out):
                 # {query_id: answer}
-                preds[test[s_batch+c][5]] = deentitize(inv_output_idx[i.item()])
+                ans_pred = inv_output_idx[i.item()]
+                #if not ans_pred.startswith("@ent"):
+                #    print(inv_output_idx[i.item()])
+                preds[test[s_batch+c][5]] = deentitize(ans_pred) if ans_pred.startswith("@ent") else ans_pred
         current_correct, current_len = update_counts(current_correct, current_len, idx_out, idx_true)
     # clicr detailed evaluation
     if args.dataset=="clicr":
@@ -406,6 +416,7 @@ def main():
     arg_parser.add_argument("--log-epochs", type=int, default=4,
                             help="Number of epochs after which to log progress, default: 4")
     arg_parser.add_argument("--lr", type=float, default=0.01, help="learning rate, default: 0.01")
+    arg_parser.add_argument("--max-vocab-size", type=int, help="maximum number of words to keep, the rest is mapped to _UNK_", default=50000)
     arg_parser.add_argument("--max-n-load", type=int, help="maximum number of clicr documents to use, for debugging")
     arg_parser.add_argument("--memory-size", type=int, default=50, help="upper limit on memory size, default: 50")
     arg_parser.add_argument("--mode", type=str, default="standard", help="standard | kv | win")
@@ -425,7 +436,7 @@ def main():
         test_q_ids = None
     if args.eval == 1:
         args.save_model = True
-    exp_dir = "./experiments/"
+    exp_dir = "/mnt/b5320167-5dbd-4498-bf34-173ac5338c8d/Datasets/memory-networks/experiments/"
     if not os.path.exists(exp_dir):
         os.makedirs(exp_dir)
     if args.train == 0 and args.eval == 1:
@@ -505,6 +516,41 @@ def main():
                 else:
                     model = args.load_model_path
                 eval_network(vocab_size, story_size, k_size, model, word_idx, output_size, output_idx, test_batches_id, test_data, log, logdir, args, cuda=args.cuda, test_q_ids=test_q_ids, ignore_missing_preds=args.ignore_missing_preds)
+        elif args.mode == "win":
+            log.info("Topping n of cands to 10!")
+            # load data
+            data, val_data, test_data, sentence_size, vocab_size, story_size, word_idx = process_data_clicr_win(
+                args, log=log)
+            if args.pretrained_word_embed:
+                log.info("Using pretrained word embeddings: {}".format(args.pretrained_word_embed))
+            else:
+                log.info("Using random initialization.")
+            # get batch indices
+            # TODO: don't leave out instances
+            n_train = len(data)
+            n_val = len(val_data)
+            n_test = len(test_data)
+            train_batches_id = list(
+                zip(range(0, n_train - args.batch_size, args.batch_size),
+                    range(args.batch_size, n_train, args.batch_size)))
+            val_batches_id = list(
+                zip(range(0, n_val - args.batch_size, args.batch_size), range(args.batch_size, n_val, args.batch_size)))
+            test_batches_id = list(
+                zip(range(0, n_test - args.batch_size, args.batch_size),
+                    range(args.batch_size, n_test, args.batch_size)))
+            if args.train == 1:
+                train_network(train_batches_id, val_batches_id, test_batches_id, data, val_data, test_data, word_idx,
+                              sentence_size, story_size=story_size,
+                              vocab_size=vocab_size, output_size=vocab_size, output_idx=None,
+                              save_model_path=save_model_path, args=args, log=log)
+            if args.eval == 1:
+                if args.train == 1:
+                    model = save_model_path
+                else:
+                    model = args.load_model_path
+                eval_network(vocab_size, story_size, sentence_size, model, word_idx, vocab_size, None, test_batches_id,
+                             test_data, log, logdir, args, cuda=args.cuda, test_q_ids=test_q_ids,
+                             ignore_missing_preds=args.ignore_missing_preds)
 
     elif args.dataset == "cbt":
         if args.dataset_part not in {"NE","CN","V","P"}:
