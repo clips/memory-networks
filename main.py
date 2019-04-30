@@ -523,7 +523,6 @@ def main():
                     model = args.load_model_path
                 eval_network(vocab_size, story_size, k_size, model, word_idx, output_size, output_idx, test_batches_id, test_data, log, logdir, args, cuda=args.cuda, test_q_ids=test_q_ids, ignore_missing_preds=args.ignore_missing_preds)
         elif args.mode == "win" or args.mode == "queryclassifier":
-            log.info("Topping n of cands to 10!")
             # load data
             data, val_data, test_data, sentence_size, vocab_size, story_size, word_idx = process_data_clicr_win(
                 args, log=log)

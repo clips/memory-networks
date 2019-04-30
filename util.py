@@ -1823,6 +1823,8 @@ def vectorize_data_cbt_win(data, word_idx, output_size, win_size, memory_size):
 def vectorize_data_clicr_win(data, word_idx, output_size, win_size, memory_size, top_k_cand=None):
     '''
     '''
+    if top_k_cand is not None:
+        print("Topping n of cands to 10!")
     W = []
     Q = []
     A = []
