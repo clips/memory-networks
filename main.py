@@ -13,7 +13,7 @@ import numpy as np
 from tqdm import tqdm
 
 from logger import get_logger
-from net import N2N, KVN2N, KVAtt
+from net import N2N, KVN2N, KVAtt, QueryClassifier
 from util import long_tensor_type, vectorize_data_clicr, vectorized_batches, vectorize_data, evaluate_clicr, save_json, \
     get_q_ids_clicr, remove_missing_preds, deentitize, process_data_clicr_kv, vectorized_batches_kv, \
     vectorize_data_clicr_kv, process_data_cbt_kv, process_data_cbt_win, vectorize_data_cbt_win, vectorized_batches_win, \
@@ -30,6 +30,8 @@ def train_network(train_batches_id, val_batches_id, test_batches_id, data, val_d
         net = KVN2N(args.batch_size, args.embed_size, vocab_size, args.hops, story_size=story_size, args=args,
                   word_idx=word_idx, output_size=output_size)
         positional = False  # don't use positional encoding for KV network
+    elif args.mode == "queryclassifier":
+        net = QueryClassifier(args.batch_size, args.embed_size, vocab_size, args=args, word_idx=word_idx, output_size=output_size)
     else:
         net = N2N(args.batch_size, args.embed_size, vocab_size, args.hops, story_size=story_size, args=args, word_idx=word_idx, output_size=output_size)
     if torch.cuda.is_available() and args.cuda == 1:
@@ -48,7 +50,7 @@ def train_network(train_batches_id, val_batches_id, test_batches_id, data, val_d
             vectorizer = vectorize_data_clicr
         elif args.mode == "kv":
             vectorizer = vectorize_data_clicr_kv
-        elif args.mode =="win":
+        elif args.mode =="win" or args.mode == "queryclassifier":
             vectorizer = vectorize_data_clicr_win
     elif args.dataset == "babi":
         if args.mode == "win":
@@ -56,7 +58,7 @@ def train_network(train_batches_id, val_batches_id, test_batches_id, data, val_d
         else:
             vectorizer = vectorize_data
     elif args.dataset == "cbt":
-        if args.mode == "win":
+        if args.mode == "win" or args.mode == "queryclassifier":
             vectorizer = vectorize_data_cbt_win
     else:
         raise NotImplementedError
@@ -72,7 +74,7 @@ def train_network(train_batches_id, val_batches_id, test_batches_id, data, val_d
             k_size = sentence_size
             train_batch_gen = vectorized_batches_kv(train_batches_id, data, word_idx, k_size, story_size,
                                                  output_size, output_idx, vectorizer, shuffle=args.shuffle)
-        elif args.mode == "win":
+        elif args.mode == "win" or args.mode == "queryclassifier":
             win_size = sentence_size
             train_batch_gen = vectorized_batches_win(train_batches_id, data, word_idx, win_size, story_size,
                                                     output_size, vectorizer, shuffle=args.shuffle)
@@ -105,7 +107,7 @@ def train_network(train_batches_id, val_batches_id, test_batches_id, data, val_d
             if args.mode == "kv":
                 val_acc, val_cor, val_tot = calculate_loss_and_accuracy_kv(net, val_batches_id, val_data, word_idx, sentence_size, story_size,
                                                                     output_size, output_idx, vectorizer, args.inspect, positional)
-            elif args.mode == "win":
+            elif args.mode == "win" or args.mode == "queryclassifier":
                 val_acc, val_cor, val_tot = calculate_loss_and_accuracy_win(net, val_batches_id, val_data, word_idx,
                                                                            sentence_size, story_size,
                                                                            output_size, vectorizer, args.inspect)
@@ -235,12 +237,15 @@ def eval_network(vocab_size, story_size, sentence_size, model, word_idx, output_
         net = KVN2N(args.batch_size, args.embed_size, vocab_size, args.hops, story_size=story_size, args=args,
                   word_idx=word_idx, output_size=output_size)
         positional = False  # don't use positional encoding for KV network
+    elif args.mode == "queryclassifier":
+        net = QueryClassifier(args.batch_size, args.embed_size, vocab_size, args=args,
+                  word_idx=word_idx, output_size=output_size)
     else:
         net = N2N(args.batch_size, args.embed_size, vocab_size, args.hops, story_size=story_size, args=args, word_idx=word_idx, output_size=output_size)
     net.load_state_dict(torch.load(model))
-    if args.mode != "win":
+    if args.mode not in {"win", "queryclassifier"}:
         inv_output_idx = {v: k for k, v in output_idx.items()}
-    elif args.mode == "win" and args.dataset == "clicr":
+    elif (args.mode == "win" or args.mode == "queryclassifier") and args.dataset == "clicr":
         inv_output_idx = {v: k for k, v in word_idx.items()}
     if args.inspect:
         n_inspect = 0
@@ -252,7 +257,7 @@ def eval_network(vocab_size, story_size, sentence_size, model, word_idx, output_
             vectorizer = vectorize_data_clicr
         elif args.mode == "kv":
             vectorizer = vectorize_data_clicr_kv
-        elif args.mode == "win":
+        elif args.mode == "win" or args.mode == "queryclassifier":
             vectorizer = vectorize_data_clicr_win
     elif args.dataset == "babi":
         if args.mode == "win":
@@ -260,7 +265,7 @@ def eval_network(vocab_size, story_size, sentence_size, model, word_idx, output_
         else:
             vectorizer = vectorize_data
     elif args.dataset == "cbt":
-        if args.mode == "win":
+        if args.mode == "win" or args.mode == "queryclassifier":
             vectorizer = vectorize_data_cbt_win
     else:
         raise NotImplementedError
@@ -271,7 +276,7 @@ def eval_network(vocab_size, story_size, sentence_size, model, word_idx, output_
         k_size = sentence_size
         test_batch_gen = vectorized_batches_kv(test_batches_id, test, word_idx, k_size, story_size,
                                                 output_size, output_idx, vectorizer, shuffle=args.shuffle)
-    elif args.mode == "win":
+    elif args.mode == "win" or args.mode == "queryclassifier":
         test_batch_gen = vectorized_batches_win(test_batches_id, test, word_idx, sentence_size, story_size, output_size,
                                              vectorizer, shuffle=args.shuffle)
 
@@ -288,7 +293,7 @@ def eval_network(vocab_size, story_size, sentence_size, model, word_idx, output_
             if args.mode == "kv":
                 inspect_kv(out, idx_true, logdir, "eval", s_batch, att_probs,
                            inv_output_idx, test, args, log)
-            elif args.mode == "win":
+            elif args.mode == "win" or args.mode == "queryclassifier":
                 raise NotImplementedError
             else:
                 inspect(out, idx_true, logdir, "eval", s_batch, att_probs,
@@ -405,6 +410,7 @@ def main():
     arg_parser.add_argument("--epochs", type=int, default=100, help="number of training epochs, default: 100")
     arg_parser.add_argument("--eval", type=int, default=1, help="evaluate after training, default: 1")
     arg_parser.add_argument("--exclude-unseen-ans", type=int, default=0)
+    arg_parser.add_argument("--exp-dir", type=str, default="/mnt/b5320167-5dbd-4498-bf34-173ac5338c8d/Datasets/memory-networks/experiments/", help="Experiments directory.")
     arg_parser.add_argument("--freeze-pretrained-word-embed", action="store_true",
                             help="will prevent the pretrained word embeddings from being updated")
     arg_parser.add_argument("--hops", type=int, default=1, help="Number of hops to make: 1, 2 or 3; default: 1 ")
@@ -419,7 +425,7 @@ def main():
     arg_parser.add_argument("--max-vocab-size", type=int, help="maximum number of words to keep, the rest is mapped to _UNK_", default=50000)
     arg_parser.add_argument("--max-n-load", type=int, help="maximum number of clicr documents to use, for debugging")
     arg_parser.add_argument("--memory-size", type=int, default=50, help="upper limit on memory size, default: 50")
-    arg_parser.add_argument("--mode", type=str, default="standard", help="standard | kv | win")
+    arg_parser.add_argument("--mode", type=str, default="standard", help="standard | kv | win | queryclassifier")
     arg_parser.add_argument("--pretrained-word-embed", type=str,
                             help="path to the txt file with word embeddings")  # "/nas/corpora/accumulate/clicr/embeddings/4bfb98c2-688e-11e7-aa74-901b0e5592c8/embeddings"
     arg_parser.add_argument("--save-model", action="store_true")
@@ -436,7 +442,7 @@ def main():
         test_q_ids = None
     if args.eval == 1:
         args.save_model = True
-    exp_dir = "/mnt/b5320167-5dbd-4498-bf34-173ac5338c8d/Datasets/memory-networks/experiments/"
+    exp_dir = args.exp_dir
     if not os.path.exists(exp_dir):
         os.makedirs(exp_dir)
     if args.train == 0 and args.eval == 1:
@@ -516,7 +522,7 @@ def main():
                 else:
                     model = args.load_model_path
                 eval_network(vocab_size, story_size, k_size, model, word_idx, output_size, output_idx, test_batches_id, test_data, log, logdir, args, cuda=args.cuda, test_q_ids=test_q_ids, ignore_missing_preds=args.ignore_missing_preds)
-        elif args.mode == "win":
+        elif args.mode == "win" or args.mode == "queryclassifier":
             log.info("Topping n of cands to 10!")
             # load data
             data, val_data, test_data, sentence_size, vocab_size, story_size, word_idx = process_data_clicr_win(
@@ -555,7 +561,7 @@ def main():
     elif args.dataset == "cbt":
         if args.dataset_part not in {"NE","CN","V","P"}:
             sys.exit("Invalid dataset part specified for CBT.")
-        if args.mode == "win":
+        if args.mode == "win" or args.mode == "queryclassifier":
             # load data
             data, val_data, test_data, sentence_size, vocab_size, story_size, word_idx = process_data_cbt_win(
                 args, log=log)

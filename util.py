@@ -1820,7 +1820,7 @@ def vectorize_data_cbt_win(data, word_idx, output_size, win_size, memory_size):
     return np.array(W), np.array(Q), np.array(A), np.array(VM), np.array(PM), np.array(WM), np.array(QM)
 
 
-def vectorize_data_clicr_win(data, word_idx, output_size, win_size, memory_size, top_k_cand=10):
+def vectorize_data_clicr_win(data, word_idx, output_size, win_size, memory_size, top_k_cand=None):
     '''
     '''
     W = []

@@ -477,3 +477,53 @@ class KVAtt(torch.nn.Module):
 
         return torch.squeeze(batch_story_embedding, dim=2)
 
+
+class QueryClassifier(torch.nn.Module):
+    def __init__(self, batch_size, embed_size, vocab_size, args, word_idx, output_size):
+        super(QueryClassifier, self).__init__()
+
+        self.embed_size = embed_size
+        self.batch_size = batch_size
+        self.pretrained_word_embed = args.pretrained_word_embed
+        self.freeze_pretrained_word_embed = args.freeze_pretrained_word_embed
+        self.word_idx = word_idx
+        self.args = args
+
+        # story embedding
+        if args.pretrained_word_embed:
+            self.A1, dim = load_emb(args.pretrained_word_embed, self.word_idx, freeze=args.freeze_pretrained_word_embed)
+            assert dim == self.embed_size
+        else:
+            self.A1 = nn.Embedding(vocab_size, embed_size)
+            self.A1.weight = nn.Parameter(torch.randn(vocab_size, embed_size).normal_(0, 0.1))
+
+        self.lin_final = nn.Linear(embed_size, output_size)
+
+    def forward(self, trainS, trainQ, trainVM, trainPM, trainSM, trainQM, inspect):
+        """
+        :param trainVM: a B*V tensor masking all predictions which are not words/entities in the relevant document
+        """
+        Q = Variable(torch.squeeze(trainQ, 1), requires_grad=False)
+        queries_emb = self.A1(Q)
+        position_encoding = get_position_encoding(queries_emb.size(0), queries_emb.size(1), self.embed_size)
+        queries = queries_emb * position_encoding
+        # zero out the masked (padded) word embeddings:
+        queries = queries * trainQM.unsqueeze(2).expand_as(queries)
+        queries_rep = torch.sum(queries, dim=1)
+        # w_u = queries_sum
+        # for i in range(self.hops):
+        #     w_u = self.one_hop(S, w_u, self.A[i], self.A[i + 1], self.TA[i], self.TA[i + 1])
+        if self.args.average_embs:
+            normalizer = torch.sum(trainQM, dim=1).unsqueeze(1).expand_as(queries_rep)
+            normalizer[normalizer==0.] = float("Inf")
+            queries_rep = queries_rep / normalizer
+
+        y_pred = self.lin_final(queries_rep)
+
+        # mask for output answers
+        y_pred_m = trainVM
+        #y_pred_m = None
+
+        out = masked_log_softmax(y_pred, y_pred_m)
+
+        return out
