@@ -422,7 +422,7 @@ def main():
     arg_parser.add_argument("--log-epochs", type=int, default=4,
                             help="Number of epochs after which to log progress, default: 4")
     arg_parser.add_argument("--lr", type=float, default=0.01, help="learning rate, default: 0.01")
-    arg_parser.add_argument("--max-vocab-size", type=int, help="maximum number of words to keep, the rest is mapped to _UNK_", default=50000)
+    arg_parser.add_argument("--max-vocab-size", type=int, help="maximum number of words to keep, the rest is mapped to _UNK_")
     arg_parser.add_argument("--max-n-load", type=int, help="maximum number of clicr documents to use, for debugging")
     arg_parser.add_argument("--memory-size", type=int, default=50, help="upper limit on memory size, default: 50")
     arg_parser.add_argument("--mode", type=str, default="standard", help="standard | kv | win | queryclassifier")

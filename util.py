@@ -247,9 +247,8 @@ def load_clicr_win(fn, ent_setup="ent", remove_notfound=True, max_n_load=None, w
     raw = load_json(fn)
     for c, datum in enumerate(raw[DATA_KEY]):
         doc_txt = datum[DOC_KEY][TITLE_KEY] + "\n" + datum[DOC_KEY][CONTEXT_KEY]
-        # keys include values
-        keys, values = prepare_win(doc_txt, win_size=win_size)  # n_words*d
-        assert len(keys) == len(values)
+        # keys include values; we'll only be using keys here
+        keys = prepare_win(doc_txt, win_size=win_size)  # n_words*d
 
         sents = []
         for sent in doc_txt.split("\n"):
@@ -480,19 +479,28 @@ def prepare_win(text, win_size=3):
             window_end = min(len(lst), i + win_size)
             contexts = []
             # go over contexts
-            for j in range(window_start, window_end):
+            #for j in range(window_start, window_end):
+            #    w = lst[j]
+            #    w = remove_concept_marks(w)
+            #    contexts.append(w.lower())
+            #contexts.append(concept)
+            for j in range(window_start, i):
                 w = lst[j]
                 w = remove_concept_marks(w)
                 contexts.append(w.lower())
             contexts.append(concept)
+            for j in range(i, window_end):
+                w = lst[j]
+                w = remove_concept_marks(w)
+                contexts.append(w.lower())
             if not contexts:
                 continue
             values.append(concept)
             keys.append(contexts)
 
     assert len(values) > 0
-
-    return keys, values
+    assert len(keys) == len(values)
+    return keys
 
 
 def prepare_kv_ent_only(text, win_size=3):
@@ -1820,7 +1828,7 @@ def vectorize_data_cbt_win(data, word_idx, output_size, win_size, memory_size):
     return np.array(W), np.array(Q), np.array(A), np.array(VM), np.array(PM), np.array(WM), np.array(QM)
 
 
-def vectorize_data_clicr_win(data, word_idx, output_size, win_size, memory_size, top_k_cand=None):
+def vectorize_data_clicr_win(data, word_idx, output_size, win_size, memory_size, top_k_cand=10):
     '''
     '''
     if top_k_cand is not None:
